@@ -59,10 +59,10 @@ EXTENSION_TO_SCIP: Dict[str, Tuple[str, str, str, str]] = {
     ".rs":   ("rust",       "scip-rust",       "cargo install scip-rust", "sourcegraph/scip-rust"),
     ".java": ("java",       "scip-java",       "see https://github.com/sourcegraph/scip-java", "sourcegraph/scip-java"),
     ".dart": ("dart",       "scip_dart",       "dart pub global activate scip_dart", "dart:stable"),
-    ".cpp":  ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
-    ".hpp":  ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
-    ".c":    ("c",          "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
-    ".h":    ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
+    ".cpp":  ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
+    ".hpp":  ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
+    ".c":    ("c",          "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
+    ".h":    ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
 }
 
 
@@ -180,6 +180,9 @@ class ScipIndexer:
                 elif lang == "dart":
                     # Dart docker image doesn't have scip_dart pre-installed
                     internal_cmd = ["bash", "-c", "dart pub global activate scip_dart && dart pub get && dart pub global run scip_dart ./"]
+                elif lang in ("cpp", "c"):
+                    # sourcegraph/scip-clang image has scip-clang as its entrypoint
+                    internal_cmd = internal_cmd[1:]
                 
                 docker_cmd.extend(internal_cmd)
                 
@@ -333,7 +336,7 @@ class ScipIndexParser:
             # Apply Rust implementations if available
             rust_impls = symbol_def_table.get("rust_impls", {})
             name = self._name_from_symbol(sym)
-            if name in rust_impls and info.get("kind") in (7, 18, 49):
+            if name in rust_impls and info.get("kind") in (7, 18, 20, 49, 53, 54):
                 info["bases"] = list(set(info.get("bases", []) + list(rust_impls[name])))
 
         files_data: Dict[str, Dict] = {}
@@ -375,7 +378,11 @@ class ScipIndexParser:
                     if kind == 0:
                         if sym.endswith("()."): kind = 17
                         elif "#" in sym:
-                            if sym.endswith("#"): kind = 7
+                            if sym.endswith("#"):
+                                if sym.startswith("scip-go") or sym.startswith("rust-analyzer"):
+                                    kind = 49
+                                else:
+                                    kind = 7
                             elif sym.endswith("()."): kind = 26
                     
                     name = self._name_from_symbol(sym)
@@ -391,10 +398,29 @@ class ScipIndexParser:
                     if kind in (26, 17):
                         node.update({"cyclomatic_complexity": 1, "decorators": [], "context": None, "class_context": None})
                         file_data["functions"].append(node)
-                    elif kind in (7, 18, 49):
+                    elif kind == 7:
                         node["bases"] = [self._name_from_symbol(b) for b in defn.get("bases", [])]
                         node["context"] = None
                         file_data["classes"].append(node)
+                    elif kind == 20 or kind == 54: # Interface or Protocol
+                        node["bases"] = [self._name_from_symbol(b) for b in defn.get("bases", [])]
+                        node["context"] = None
+                        if "interfaces" not in file_data: file_data["interfaces"] = []
+                        file_data["interfaces"].append(node)
+                    elif kind == 18: # Enum
+                        node["context"] = None
+                        if "enums" not in file_data: file_data["enums"] = []
+                        file_data["enums"].append(node)
+                    elif kind == 49: # Struct
+                        node["bases"] = [self._name_from_symbol(b) for b in defn.get("bases", [])]
+                        node["context"] = None
+                        if "structs" not in file_data: file_data["structs"] = []
+                        file_data["structs"].append(node)
+                    elif kind == 53: # Trait
+                        node["bases"] = [self._name_from_symbol(b) for b in defn.get("bases", [])]
+                        node["context"] = None
+                        if "traits" not in file_data: file_data["traits"] = []
+                        file_data["traits"].append(node)
                     elif kind in (61, 15):
                         node.update({"value": None, "type": return_type, "context": None, "class_context": None})
                         file_data["variables"].append(node)

@@ -601,9 +601,9 @@ class GraphWriter:
                     """
                     UNWIND $batch AS row
                     MATCH (child {name: row.child_name, path: row.path})
-                    WHERE child:Class OR child:Trait OR child:Interface
+                    WHERE child:Class OR child:Trait OR child:Interface OR child:Struct OR child:Enum OR child:Union OR child:Record
                     MATCH (parent {name: row.parent_name, path: row.resolved_parent_file_path})
-                    WHERE parent:Class OR parent:Trait OR parent:Interface
+                    WHERE parent:Class OR parent:Trait OR parent:Interface OR parent:Struct OR parent:Enum OR parent:Union OR parent:Record
                     MERGE (child)-[r:INHERITS]->(parent)
                     SET r.confidence_label = coalesce(row.confidence_label, 'EXTRACTED')
                 """,
@@ -1179,7 +1179,7 @@ class GraphWriter:
                 break
             info_logger(f"[DELETE] Removed {deleted} CONTAINS rels for {repo_path_str}")
 
-        for label in ("Function", "Class", "File"):
+        for label in ("Function", "Class", "Interface", "Trait", "Struct", "Enum", "Variable", "Macro", "Union", "Record", "Property", "File"):
             while True:
                 with self.driver.session() as session:
                     result = session.run(

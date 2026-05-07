@@ -74,25 +74,30 @@ def build_inheritance_and_csharp_files(
             continue
 
         caller_file_path = str(Path(file_data["path"]).resolve())
-        local_class_names = {c["name"] for c in file_data.get("classes", [])}
+        local_class_names = set()
+        for key in ["classes", "structs", "traits", "interfaces"]:
+            for item in file_data.get(key, []):
+                local_class_names.add(item["name"])
+
         local_imports = {
             imp.get("alias") or imp["name"].split(".")[-1]: imp["name"]
             for imp in file_data.get("imports", [])
         }
 
-        for class_item in file_data.get("classes", []):
-            if not class_item.get("bases"):
-                continue
-            for base_class_str in class_item["bases"]:
-                resolved = resolve_inheritance_link(
-                    class_item,
-                    base_class_str,
-                    caller_file_path,
-                    local_class_names,
-                    local_imports,
-                    imports_map,
-                )
-                if resolved:
-                    inheritance_batch.append(resolved)
+        for key in ["classes", "structs", "traits", "interfaces"]:
+            for class_item in file_data.get(key, []):
+                if not class_item.get("bases"):
+                    continue
+                for base_class_str in class_item["bases"]:
+                    resolved = resolve_inheritance_link(
+                        class_item,
+                        base_class_str,
+                        caller_file_path,
+                        local_class_names,
+                        local_imports,
+                        imports_map,
+                    )
+                    if resolved:
+                        inheritance_batch.append(resolved)
 
     return inheritance_batch, csharp_files

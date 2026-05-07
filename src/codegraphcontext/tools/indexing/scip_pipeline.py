@@ -98,12 +98,32 @@ async def run_scip_index_async(
                                     }
                                 )
 
-                        ts_classes = {c["name"]: c for c in ts_data.get("classes", [])}
-                        for c in file_data.get("classes", []):
-                            ts_c = ts_classes.get(c["name"])
-                            if ts_c:
-                                # Prioritize SCIP bases if present, fallback to Tree-sitter
-                                c["bases"] = c.get("bases") or ts_c.get("bases", [])
+                        ts_item_map = {}
+                        ts_key_map = {}
+                        for k in ["classes", "structs", "traits", "interfaces"]:
+                            for c in ts_data.get(k, []):
+                                ts_item_map[c["name"]] = c
+                                ts_key_map[c["name"]] = k
+
+                        new_file_data = {k: [] for k in ["classes", "structs", "traits", "interfaces"]}
+                        
+                        for key in ["classes", "structs", "traits", "interfaces"]:
+                            for item in file_data.get(key, []):
+                                ts_item = ts_item_map.get(item["name"])
+                                target_key = key
+                                if ts_item:
+                                    item.update({
+                                        "source": ts_item.get("source"),
+                                    })
+                                    item["bases"] = item.get("bases") or ts_item.get("bases", [])
+                                    # Move to Tree-sitter's preferred category if they disagree
+                                    if ts_key_map[item["name"]] != key:
+                                        target_key = ts_key_map[item["name"]]
+                                        
+                                new_file_data[target_key].append(item)
+                                
+                        for key in ["classes", "structs", "traits", "interfaces"]:
+                            file_data[key] = new_file_data[key]
 
                         file_data["imports"] = ts_data.get("imports", [])
                         file_data["variables"] = ts_data.get("variables", [])
