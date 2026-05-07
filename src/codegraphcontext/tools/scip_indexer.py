@@ -51,29 +51,33 @@ from ..utils.debug_log import info_logger, warning_logger, error_logger, debug_l
 
 # Maps file extension → (language name, scip CLI binary name, install hint)
 EXTENSION_TO_SCIP: Dict[str, Tuple[str, str, str]] = {
-    ".py":   ("python",     "scip-python",     "pip install scip-python"),
-    ".ipynb":("python",     "scip-python",     "pip install scip-python"),
-    ".ts":   ("typescript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript"),
-    ".tsx":  ("typescript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript"),
-    ".js":   ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript"),
-    ".jsx":  ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript"),
-    ".mjs":  ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript"),
-    ".cjs":  ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript"),
-    ".go":   ("go",         "scip-go",         "go install github.com/sourcegraph/scip-go/...@latest"),
-    ".rs":   ("rust",       "scip-rust",       "cargo install scip-rust"),
-    ".java": ("java",       "scip-java",       "see https://github.com/sourcegraph/scip-java"),
-    ".cpp":  ("cpp",        "scip-clang",      "brew install llvm"),
-    ".hpp":  ("cpp",        "scip-clang",      "brew install llvm"),
-    ".c":    ("c",          "scip-clang",      "brew install llvm"),
-    ".h":    ("cpp",        "scip-clang",      "brew install llvm"),
+    ".py":   ("python",     "scip-python",     "pip install scip-python", "sourcegraph/scip-python"),
+    ".ipynb":("python",     "scip-python",     "pip install scip-python", "sourcegraph/scip-python"),
+    ".ts":   ("typescript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript", "sourcegraph/scip-typescript"),
+    ".tsx":  ("typescript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript", "sourcegraph/scip-typescript"),
+    ".js":   ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript", "sourcegraph/scip-typescript"),
+    ".jsx":  ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript", "sourcegraph/scip-typescript"),
+    ".mjs":  ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript", "sourcegraph/scip-typescript"),
+    ".cjs":  ("javascript", "scip-typescript", "npm install -g @sourcegraph/scip-typescript", "sourcegraph/scip-typescript"),
+    ".go":   ("go",         "scip-go",         "go install github.com/sourcegraph/scip-go/...@latest", "sourcegraph/scip-go"),
+    ".rs":   ("rust",       "scip-rust",       "cargo install scip-rust", "sourcegraph/scip-rust"),
+    ".java": ("java",       "scip-java",       "see https://github.com/sourcegraph/scip-java", "sourcegraph/scip-java"),
+    ".cpp":  ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
+    ".hpp":  ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
+    ".c":    ("c",          "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
+    ".h":    ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang"),
 }
 
 
 def is_scip_available(lang: str) -> bool:
-    """Check whether the SCIP indexer binary for this language is installed."""
-    for ext, (l, binary, _) in EXTENSION_TO_SCIP.items():
+    """Check whether the SCIP indexer (binary or docker) for this language is available."""
+    has_docker = shutil.which("docker") is not None
+    for ext, (l, binary, _, docker_image) in EXTENSION_TO_SCIP.items():
         if l == lang:
-            return shutil.which(binary) is not None
+            if shutil.which(binary) is not None:
+                return True
+            if has_docker and docker_image:
+                return True
     return False
 
 
@@ -84,11 +88,11 @@ def detect_project_lang(path: Path, scip_languages: List[str]) -> Optional[str]:
     """
     if not path.is_dir():
         ext = path.suffix
-        lang = EXTENSION_TO_SCIP.get(ext, (None,))[0]
+        lang = EXTENSION_TO_SCIP.get(ext, (None, None, None, None))[0]
         return lang if lang in scip_languages else None
 
     counts: Dict[str, int] = {}
-    for ext, (lang, _, _) in EXTENSION_TO_SCIP.items():
+    for ext, (lang, _, _, _) in EXTENSION_TO_SCIP.items():
         if lang not in scip_languages:
             continue
         counts[lang] = counts.get(lang, 0) + sum(
@@ -115,56 +119,87 @@ class ScipIndexer:
         Run the SCIP indexer for `lang` on `project_path`.
         Returns path to index.scip, or None if the indexer failed / is not installed.
         """
-        binary, install_hint = self._get_binary(lang)
-        if not binary:
-            warning_logger(
-                f"SCIP indexer for '{lang}' not found. "
-                f"Install with: {install_hint}"
-            )
-            return None
-
+        binary, install_hint, docker_image = self._get_binary(lang)
         output_file = output_dir / "index.scip"
-        cmd = self._build_command(lang, binary, project_path, output_file)
-        if not cmd:
-            warning_logger(f"No SCIP command template defined for language: {lang}")
-            return None
+        
+        if binary:
+            cmd = self._build_command(lang, binary, project_path, output_file)
+            if not cmd:
+                warning_logger(f"No SCIP command template defined for language: {lang}")
+                return None
 
-        info_logger(f"Running SCIP indexer: {' '.join(str(c) for c in cmd)}")
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(project_path),
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minute hard limit
-            )
-            if result.returncode != 0:
-                warning_logger(
-                    f"SCIP indexer exited with code {result.returncode}.\n"
-                    f"stderr: {result.stderr[:500]}"
+            info_logger(f"Running local SCIP indexer: {' '.join(str(c) for c in cmd)}")
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(project_path),
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
                 )
-                return None
+                if result.returncode == 0 and output_file.exists():
+                    info_logger(f"SCIP index written to {output_file}")
+                    return output_file
+                warning_logger(f"Local SCIP indexer failed (code {result.returncode}). stderr: {result.stderr[:500]}")
+            except Exception as e:
+                warning_logger(f"Local SCIP indexer failed: {e}")
 
-            if not output_file.exists():
-                warning_logger(f"SCIP indexer ran but no index.scip produced at {output_file}")
-                return None
+        # Fallback to Docker
+        if docker_image and shutil.which("docker"):
+            info_logger(f"Attempting SCIP indexing via Docker ({docker_image})...")
+            try:
+                # 1. Pre-run: for Go we often need 'go mod tidy'
+                if lang == "go":
+                    info_logger("Running 'go mod tidy' inside container first...")
+                    subprocess.run(
+                        ["docker", "run", "--rm", "-v", f"{project_path.resolve()}:/src", "-w", "/src", docker_image, "go", "mod", "tidy"],
+                        capture_output=True, timeout=120
+                    )
 
-            info_logger(f"SCIP index written to {output_file} ({output_file.stat().st_size // 1024} KB)")
-            return output_file
+                # 2. Run indexer
+                docker_cmd = [
+                    "docker", "run", "--rm",
+                    "-v", f"{project_path.resolve()}:/src",
+                    "-v", f"{output_dir.resolve()}:/out",
+                    "-w", "/src",
+                    docker_image,
+                    # We use 'sh -c' to handle complex commands if needed, 
+                    # but standard scip-lang binaries work directly.
+                    # Note: scip-go image entrypoint is usually scip-go
+                ]
+                
+                # Build the internal command (replacing output path with container-relative path)
+                internal_cmd = self._build_command(lang, binary or lang, Path("/src"), Path("/out/index.scip"))
+                if lang == "go" and not binary:
+                    # Specific override for scip-go if binary not found locally
+                    internal_cmd = ["scip-go", "index", ".", "--output", "/out/index.scip"]
+                
+                docker_cmd.extend(internal_cmd)
+                
+                info_logger(f"Running Docker command: {' '.join(docker_cmd)}")
+                result = subprocess.run(
+                    docker_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                if result.returncode == 0 and output_file.exists():
+                    info_logger(f"SCIP index written to {output_file} via Docker")
+                    return output_file
+                error_logger(f"Docker SCIP indexing failed (code {result.returncode}). stderr: {result.stderr[:500]}")
+            except Exception as e:
+                error_logger(f"Docker SCIP indexing failed: {e}")
 
-        except subprocess.TimeoutExpired:
-            warning_logger("SCIP indexer timed out after 5 minutes.")
-            return None
-        except Exception as e:
-            warning_logger(f"SCIP indexer failed with exception: {e}")
-            return None
+        if not binary:
+            warning_logger(f"SCIP indexer for '{lang}' not found locally or in Docker. Install with: {install_hint}")
+        return None
 
-    def _get_binary(self, lang: str) -> Tuple[Optional[str], str]:
-        for ext, (l, binary, install_hint) in EXTENSION_TO_SCIP.items():
+    def _get_binary(self, lang: str) -> Tuple[Optional[str], str, Optional[str]]:
+        for ext, (l, binary, install_hint, docker_image) in EXTENSION_TO_SCIP.items():
             if l == lang:
                 found = shutil.which(binary)
-                return found, install_hint
-        return None, "unknown language"
+                return found, install_hint, docker_image
+        return None, "unknown language", None
 
     def _build_command(self, lang: str, binary: str, project_path: Path, output_file: Path) -> Optional[List]:
         """Build the CLI command for each supported SCIP indexer."""
@@ -202,8 +237,9 @@ class ScipIndexer:
                 return [binary, "index", "--infer-tsconfig", "--output", out]
 
         elif lang == "go":
-            # scip-go --output index.scip
-            return [binary, "--output", out]
+            # scip-go index . --output index.scip
+            # Using '.' ensures compatibility across versions (some treat 'index' as a package)
+            return [binary, "index", ".", "--output", out]
 
         elif lang == "rust":
             # scip-rust index --output index.scip
@@ -298,6 +334,13 @@ class ScipIndexParser:
                     symbol_def_table[sym_info.symbol]["display_name"] = sym_info.display_name
                     symbol_def_table[sym_info.symbol]["documentation"] = "\n".join(sym_info.documentation)
                     symbol_def_table[sym_info.symbol]["kind"] = sym_info.kind
+                    
+                    # Extract inheritance/implementation relationships
+                    bases = []
+                    for rel in sym_info.relationships:
+                        if rel.is_implementation:
+                            bases.append(rel.symbol)
+                    symbol_def_table[sym_info.symbol]["bases"] = bases
 
         # Also check external_symbols
         for sym_info in index.external_symbols:
@@ -410,7 +453,8 @@ class ScipIndexParser:
                         node["class_context"] = None
                         file_data["functions"].append(node)
                     elif kind == 7:  # Class
-                        node["bases"] = []
+                        # Use the bases we collected in the first pass (converted to names for the resolver)
+                        node["bases"] = [self._name_from_symbol(b) for b in defn.get("bases", [])]
                         node["context"] = None
                         file_data["classes"].append(node)
                     elif kind in (61, 15):  # Variable, Field
