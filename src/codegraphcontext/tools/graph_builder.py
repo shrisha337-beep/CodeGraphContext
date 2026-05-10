@@ -799,7 +799,7 @@ class GraphBuilder:
                 f"[CALLS] Skipped {len(diagnostics)} unresolved call(s). "
                 f"Sample: {sample}"
             )
-        self._writer.write_function_call_groups(*groups)
+        self._writer.write_function_call_groups(groups)
 
     def _create_all_function_calls(
         self, all_file_data: list[Dict], imports_map: dict, file_class_lookup: Optional[Dict[str, set]] = None

@@ -450,7 +450,7 @@ class GraphWriter:
                 file_path=file_path_str,
             )
 
-            def write_function_call_groups(
+    def write_function_call_groups(
         self,
         resolved_calls: List[Dict],
     ) -> None:
@@ -461,7 +461,7 @@ class GraphWriter:
             MATCH (caller {name: row.caller_name, path: row.caller_file_path, line_number: row.caller_line_number})
             WHERE caller:Function OR caller:Class OR caller:Interface OR caller:Trait OR caller:Struct OR caller:Enum OR caller:Record OR caller:Union
             MATCH (called {name: row.called_name, path: row.called_file_path})
-            WHERE called:Function OR called:Class OR called:Interface OR called:Trait OR called:Struct OR called:Enum OR called:Record OR caller:Union
+            WHERE called:Function OR called:Class OR called:Interface OR called:Trait OR called:Struct OR called:Enum OR called:Record OR called:Union
             MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
             SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
                 c.confidence_label = row.confidence_label
