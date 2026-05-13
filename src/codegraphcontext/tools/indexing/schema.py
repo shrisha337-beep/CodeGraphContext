@@ -1,3 +1,4 @@
+# src/codegraphcontext/tools/indexing/schema.py
 """Create constraints and indexes for graph backends (Neo4j / Falkor-style Cypher)."""
 
 from typing import Any

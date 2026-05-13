@@ -1,3 +1,4 @@
+# src/codegraphcontext/tools/indexing/resolution/inheritance.py
 """Resolve class inheritance into INHERITS row payloads (no DB I/O for non-C# batch)."""
 
 from pathlib import Path

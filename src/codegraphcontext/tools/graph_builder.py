@@ -1,3 +1,4 @@
+# src/codegraphcontext/tools/graph_builder.py
 
 # src/codegraphcontext/tools/graph_builder.py
 """Facade for graph indexing; implementation lives in indexing/."""

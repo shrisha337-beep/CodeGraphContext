@@ -1,3 +1,4 @@
+# src/codegraphcontext/tools/indexing/persistence/writer.py
 """All graph DB writes for indexing (single persistence entry point)."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# src/codegraphcontext/tools/scip_indexer.py
 """
 scip_indexer.py
 ---------------

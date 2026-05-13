@@ -1,3 +1,4 @@
+# src/codegraphcontext/cli/config_manager.py
 """
 Configuration management for CodeGraphContext.
 Handles reading, writing, and validating configuration settings.

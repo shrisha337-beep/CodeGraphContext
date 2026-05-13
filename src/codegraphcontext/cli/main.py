@@ -77,7 +77,7 @@ from .visualizer import (
 # Initialize the Typer app and Rich console for formatted output.
 app = typer.Typer(
     name="cgc",
-    help="CodeGraphContext: An MCP server for AI-powered code analysis.\n\n[DEPRECATED] 'cgc start' is deprecated. Use 'cgc mcp start' instead.",
+    help="CodeGraphContext: An MCP server for AI-powered code analysis.",
     add_completion=True,
 )
 console = Console(stderr=True)
@@ -1046,13 +1046,6 @@ def doctor():
 
 
 
-@app.command()
-def start():
-    """
-    [DEPRECATED] Use 'cgc mcp start' instead. This command will be removed in a future version.
-    """
-    console.print("[yellow]⚠️  'cgc start' is deprecated. Use 'cgc mcp start' instead.[/yellow]")
-    mcp_start()
 
 
 @app.command()

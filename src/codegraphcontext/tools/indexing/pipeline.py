@@ -1,3 +1,4 @@
+# src/codegraphcontext/tools/indexing/pipeline.py
 """Orchestrates full-repo indexing (Tree-sitter path)."""
 
 from __future__ import annotations
