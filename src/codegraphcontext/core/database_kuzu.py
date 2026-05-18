@@ -427,8 +427,24 @@ class KuzuSessionWrapper:
                     all_keys.update(item.keys())
                 if all_keys:
                     key_order = sorted(all_keys)
+                    # Detect relationship batches — these should NOT be
+                    # deduplicated because distinct relationship edges may
+                    # serialize identically yet represent different graph edges
+                    # (e.g. multiple CALLS from the same caller to the same
+                    # target at different call sites).
+                    _REL_BATCH_KEYS = {
+                        "child_name", "parent_name", "resolved_parent_file_path",
+                        "caller_name", "called_name", "caller_file_path",
+                        "called_file_path", "caller_line_number",
+                        "func_name", "arg_name",
+                        "caller_symbol", "callee_name",
+                        "injector_class", "injected_class",
+                        "interface_name",
+                    }
+                    is_rel_batch = bool(all_keys & _REL_BATCH_KEYS)
+
                     normalized_rows = []
-                    seen_rows = set()
+                    seen_rows = set() if not is_rel_batch else None
                     for item in sanitized:
                         row = {k: item.get(k) for k in key_order}
                         # NULL values in MERGE key fields (especially line_number)
@@ -437,10 +453,11 @@ class KuzuSessionWrapper:
                         for int_key in ("line_number", "function_line_number", "end_line"):
                             if int_key in row and row[int_key] is None:
                                 row[int_key] = -1
-                        row_key = json.dumps(row, sort_keys=True, default=str)
-                        if row_key in seen_rows:
-                            continue
-                        seen_rows.add(row_key)
+                        if seen_rows is not None:
+                            row_key = json.dumps(row, sort_keys=True, default=str)
+                            if row_key in seen_rows:
+                                continue
+                            seen_rows.add(row_key)
                         normalized_rows.append(row)
                     return normalized_rows
 
@@ -488,13 +505,11 @@ class KuzuSessionWrapper:
             return "parser exception" in err or "invalid input <call db." in err
         if query_type == "module_deps":
             return "variable file is not in scope" in err or "binder exception" in err
-        if query_type == "calls_resolution":
-            return (
-                "casting between node and node is not implemented" in err
-                or "bound by multiple node labels is not supported" in err
-            )
-        if query_type == "inheritance_resolution":
-            return "bound by multiple node labels is not supported" in err
+        # Do NOT fail-fast for calls_resolution or inheritance_resolution.
+        # The writer iterates over label pairs with its own try/except for
+        # binder exceptions.  Disabling the entire query type here would
+        # silently drop valid edges for label pairs that DO have schema
+        # bindings, causing parity mismatches vs FalkorDB / Neo4j.
         return False
 
     def _disable_query_type(self, query_type: str, error: Exception) -> None:
