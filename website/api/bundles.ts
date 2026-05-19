@@ -3,8 +3,10 @@
 
 export default async function handler(req: any, res: any) {
     try {
-        const org = process.env.GITHUB_REPOSITORY?.split('/')[0] || 'CodeGraphContext';
-        const repo = process.env.GITHUB_REPOSITORY?.split('/')[1] || 'CodeGraphContext';
+        // Query the official CodeGraphContext parent repository for pre-indexed releases,
+        // unless a custom registry is explicitly set in environment variables.
+        const org = process.env.OFFICIAL_REGISTRY_ORG || 'CodeGraphContext';
+        const repo = process.env.OFFICIAL_REGISTRY_REPO || 'CodeGraphContext';
 
         const allBundles: any[] = [];
 

@@ -38,28 +38,51 @@ const BundleRegistrySection = () => {
         setLoading(true);
 
         try {
-            // In development, show mock data
+            // First, try to fetch from Vercel API `/api/bundles`
+            try {
+                const response = await fetch('/api/bundles');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.bundles && data.bundles.length > 0) {
+                        setBundles(data.bundles);
+                        setLoading(false);
+                        return;
+                    }
+                }
+            } catch (apiErr) {
+                console.warn('Local Vercel api/bundles endpoint unavailable, attempting direct fetch:', apiErr);
+            }
+
+            // In development, try to fetch live weekly bundles directly from GitHub Releases to show all 33 repos
             if (import.meta.env.DEV) {
-                setTimeout(() => {
-                    setBundles(getMockBundles());
-                    setLoading(false);
-                }, 1000);
-                return;
+                try {
+                    const ghResponse = await fetch(
+                        'https://api.github.com/repos/CodeGraphContext/CodeGraphContext/releases',
+                        { headers: { 'Accept': 'application/vnd.github.v3+json' } }
+                    );
+                    if (ghResponse.ok) {
+                        const releases = await ghResponse.json();
+                        const weeklyReleases = releases.filter((r: any) =>
+                            r.tag_name.startsWith('bundles-') && r.tag_name !== 'bundles-latest'
+                        );
+                        if (weeklyReleases.length > 0) {
+                            const parsed = parseWeeklyBundles(weeklyReleases[0]);
+                            if (parsed && parsed.length > 0) {
+                                setBundles(parsed);
+                                setLoading(false);
+                                return;
+                            }
+                        }
+                    }
+                } catch (ghErr) {
+                    console.error('Failed to fetch direct GitHub releases in DEV mode:', ghErr);
+                }
             }
 
-            // Fetch from our API endpoint (production)
-            const response = await fetch('/api/bundles');
-
-            if (response.ok) {
-                const data = await response.json();
-                setBundles(data.bundles || []);
-            } else {
-                console.error('Failed to fetch bundles');
-                setBundles(getMockBundles());
-            }
+            // Fallback to local mock bundles if offline or rate-limited
+            setBundles(getMockBundles());
         } catch (error) {
             console.error('Error fetching bundles:', error);
-            // Fallback to mock data on error
             setBundles(getMockBundles());
         } finally {
             setLoading(false);
