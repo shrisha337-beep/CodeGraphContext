@@ -68,20 +68,52 @@ const Explore = () => {
   const cypherQuery = searchParams.get("cypher_query") || "";
   const bundleUrl = searchParams.get("bundle_url") || "";
   
-  // Helper to bypass CORS for GitHub files and release assets
-  const getCorsFriendlyUrl = (url: string): string => {
-    if (!url) return "";
+  // Helper to fetch files using a sequential pool of robust CORS proxies
+  const fetchWithFallbackProxies = async (url: string): Promise<Response> => {
+    if (!url) throw new Error("URL is empty");
+    
+    // 1. Check raw githubusercontent.com to bypass proxy using jsDelivr CDN directly
     if (url.includes("raw.githubusercontent.com")) {
       const match = url.match(/raw\.githubusercontent\.com\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/);
       if (match) {
-        const [_, owner, repo, branch, filepath] = match;
-        return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${filepath}`;
+        const [_, ownerName, repoName, branch, filepath] = match;
+        const jsdelivrUrl = `https://cdn.jsdelivr.net/gh/${ownerName}/${repoName}@${branch}/${filepath}`;
+        try {
+          const res = await fetch(jsdelivrUrl);
+          if (res.ok) return res;
+        } catch (e) {
+          console.warn("jsDelivr CDN fetch failed, falling back to CORS proxies...", e);
+        }
       }
     }
-        if (url.includes("github.com") && (url.includes("/releases/download/") || url.includes("/raw/") || url.includes("/archive/"))) {
-      return `https://corsproxy.io/?${encodeURIComponent(url)}`;
+
+    const proxies = [
+      // Proxy 1: corsproxy.io (Very fast, but sometimes blocks large zips)
+      (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+      // Proxy 2: allorigins.win (Extremely reliable for release assets & large archives)
+      (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+      // Proxy 3: thingproxy.freeboard.io (Fallback proxy)
+      (u: string) => `https://thingproxy.freeboard.io/fetch/${u}`
+    ];
+
+    let lastError: any = null;
+    for (const proxy of proxies) {
+      try {
+        const proxiedUrl = proxy(url);
+        console.log(`[Proxy] Attempting fetch: ${proxiedUrl}`);
+        const res = await fetch(proxiedUrl);
+        if (res.ok) return res;
+        if (res.status === 403 || res.status === 429) {
+          console.warn(`[Proxy] Status ${res.status} received. Trying next proxy...`);
+          continue;
+        }
+        return res; // Return regular errors (like 404) directly to avoid looping
+      } catch (err) {
+        lastError = err;
+        console.warn("[Proxy] Connection failed, trying next fallback proxy...", err);
+      }
     }
-    return url;
+    throw lastError || new Error("Failed to fetch via all available CORS proxies.");
   };
 
   // If owner and repo path parameters are present, auto-fetch and index the codebase!
@@ -94,21 +126,158 @@ const Explore = () => {
     const autoFetchAndIndex = async () => {
       setLoading(true);
       setError(null);
-      setProgressText("Downloading repository zip archive...");
-      setProgressValue(10);
       try {
-        // Fetch public repository ZIP via dynamic CORS-friendly proxy
-        let zipUrl = getCorsFriendlyUrl(`https://github.com/${owner}/${repo}/archive/refs/heads/main.zip`);
-        let response = await fetch(zipUrl);
+        // Step 1: Query `/api/bundles` to see if a pre-indexed bundle exists for this repository
+        setProgressText("Checking pre-indexed bundle registry...");
+        setProgressValue(5);
         
-        if (!response.ok) {
-          // Fallback to master branch
-          zipUrl = getCorsFriendlyUrl(`https://github.com/${owner}/${repo}/archive/refs/heads/master.zip`);
-          response = await fetch(zipUrl);
+        let bundleUrlToUse = "";
+        try {
+          const registryRes = await fetch(`/api/bundles?t=${Date.now()}`);
+          if (registryRes.ok) {
+            const registryData = await registryRes.json();
+            const matchingBundle = registryData.bundles?.find(
+              (b: any) => b.repo?.toLowerCase() === `${owner}/${repo}`.toLowerCase()
+            );
+            if (matchingBundle && matchingBundle.download_url) {
+              bundleUrlToUse = matchingBundle.download_url;
+              console.log("Pre-indexed bundle found in registry:", bundleUrlToUse);
+            }
+          }
+        } catch (registryErr) {
+          console.warn("Registry check failed, proceeding with live indexing fallback:", registryErr);
         }
 
-        if (!response.ok) {
-          throw new Error(`Failed to fetch repository zip file (verify it is public and exists).`);
+        if (bundleUrlToUse) {
+          // --- PRE-INDEXED GRAPH EXTRACTION PATH (FAST ROUTE) ---
+          setProgressText("Pre-indexed bundle found! Downloading pre-indexed graph...");
+          setProgressValue(20);
+          
+          const response = await fetchWithFallbackProxies(bundleUrlToUse);
+          
+          setProgressText("Unpacking pre-indexed bundle...");
+          setProgressValue(50);
+          const buffer = await response.arrayBuffer();
+          const jszip = await JSZip.loadAsync(buffer);
+          
+          const nodesFile = jszip.file("nodes.jsonl");
+          const edgesFile = jszip.file("edges.jsonl");
+          
+          if (!nodesFile || !edgesFile) {
+            throw new Error("Invalid CGC bundle: nodes.jsonl and edges.jsonl are required.");
+          }
+          
+          let metadata: any = {};
+          if (jszip.file("metadata.json")) {
+            const metaText = await jszip.file("metadata.json")!.async("text");
+            try {
+              metadata = JSON.parse(metaText);
+            } catch (e) {
+              console.warn("Could not parse metadata.json", e);
+            }
+          }
+          
+          const repoName = metadata.repo || "";
+          
+          const nodesText = await nodesFile.async("text");
+          const nodeLines = nodesText.split("\n").filter(line => line.trim() !== "");
+          const nodes = nodeLines.map((line, idx) => {
+            try {
+              const nodeData = JSON.parse(line);
+              const labels = nodeData._labels || [];
+              const id = nodeData._id;
+              
+              const properties: Record<string, any> = {};
+              for (const key of Object.keys(nodeData)) {
+                if (key !== '_labels' && key !== '_id') {
+                  properties[key] = nodeData[key];
+                }
+              }
+              
+              for (const key of Object.keys(properties)) {
+                if (typeof properties[key] === 'string') {
+                  const val = properties[key];
+                  if (val.startsWith('/') || val.match(/^[a-zA-Z]:\\/) || val.includes('\\') || val.includes('/')) {
+                    if (key === 'path' || key === 'file' || key === 'repo_path' || key === 'import_path') {
+                      properties[key] = sanitizePath(val, repoName);
+                    }
+                  }
+                }
+              }
+              
+              let displayName = String(properties.name || properties.label || properties.path || 'Unknown');
+              if (displayName.startsWith('/') || displayName.includes('\\') || displayName.includes('/')) {
+                displayName = sanitizePath(displayName, repoName);
+              }
+              
+              const type = labels[0] ? (labels[0].charAt(0).toUpperCase() + labels[0].slice(1)) : 'Other';
+              
+              return {
+                id: String(id),
+                name: displayName,
+                label: displayName,
+                type: type,
+                file: String(properties.path || properties.file || ''),
+                val: (labels.length > 0 && ['Repository', 'Class', 'Interface', 'Trait'].includes(labels[0])) ? 4 : 2,
+                properties: properties
+              };
+            } catch (err) {
+              return null;
+            }
+          }).filter(Boolean);
+          
+          setProgressText("Linking semantic references...");
+          setProgressValue(80);
+          
+          const edgesText = await edgesFile.async("text");
+          const edgeLines = edgesText.split("\n").filter(line => line.trim() !== "");
+          const links = edgeLines.map((line, idx) => {
+            try {
+              const edgeData = JSON.parse(line);
+              return {
+                id: `${edgeData.from}_to_${edgeData.to}_${edgeData.type}_${idx}`,
+                source: String(edgeData.from),
+                target: String(edgeData.to),
+                type: String(edgeData.type).toUpperCase()
+              };
+            } catch (err) {
+              return null;
+            }
+          }).filter(Boolean);
+          
+          const filePaths: string[] = [];
+          for (const n of nodes as any[]) {
+            if (n.file && n.type.toLowerCase() === 'file') {
+              filePaths.push(n.file);
+            }
+          }
+          const sortedFiles = Array.from(new Set(filePaths)).sort();
+          
+          setProgressText("Complete!");
+          setProgressValue(100);
+          await new Promise((r) => setTimeout(r, 450));
+          
+          setGraphData({
+            nodes,
+            links,
+            files: sortedFiles,
+            fileContents: {},
+            metadata
+          });
+          return;
+        }
+
+        // --- LIVE CODE INDEXING FLOW (FALLBACK ROUTE) ---
+        setProgressText("Downloading repository zip archive...");
+        setProgressValue(10);
+        
+        let response;
+        try {
+          const zipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/main.zip`;
+          response = await fetchWithFallbackProxies(zipUrl);
+        } catch (err) {
+          const fallbackZipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/master.zip`;
+          response = await fetchWithFallbackProxies(fallbackZipUrl);
         }
 
         setProgressText("Unzipping archive in-memory...");
@@ -184,8 +353,7 @@ const Explore = () => {
       setLoading(true);
       setError(null);
       try {
-        const targetUrl = getCorsFriendlyUrl(bundleUrl);
-        const response = await fetch(targetUrl);
+        const response = await fetchWithFallbackProxies(bundleUrl);
         if (!response.ok) {
           throw new Error(`Failed to fetch bundle from URL (${response.status})`);
         }
