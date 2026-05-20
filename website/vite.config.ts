@@ -8,6 +8,18 @@ export default defineConfig(({ mode }) => ({
     host: "::",
     port: 8080,
     proxy: {
+      "/api/github-zip": {
+        target: "https://codeload.github.com",
+        changeOrigin: true,
+        rewrite: (path) => {
+          const match = path.match(/^\/api\/github-zip\/([^\/]+)\/([^\/]+)\/([^\/]+)/);
+          if (match) {
+            const [_, owner, repo, branch] = match;
+            return `/${owner}/${repo}/legacy.zip/${branch}`;
+          }
+          return path;
+        },
+      },
       "/api/pypi": {
         target: "https://pypistats.org",
         changeOrigin: true,

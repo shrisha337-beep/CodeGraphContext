@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/github-zip/:owner/:repo/:branch",
+      "destination": "https://codeload.github.com/:owner/:repo/legacy.zip/:branch"
+    },
+    {
       "source": "/api/pypi/:path*",
       "destination": "/api/pypi"
     },

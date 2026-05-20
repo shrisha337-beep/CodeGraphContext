@@ -53,6 +53,143 @@ const sanitizePath = (pathStr: string, repoName?: string): string => {
   return p;
 };
 
+// ============================================================================
+// INDEXEDDB GRAPH CACHE SERVICE
+// ============================================================================
+const DB_NAME = "cgc-visualizer-cache";
+const DB_VERSION = 1;
+const STORE_NAME = "graphs";
+
+const openDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "key" });
+      }
+    };
+  });
+};
+
+const getCachedGraph = async (owner: string, repo: string): Promise<any | null> => {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, "readonly");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(`${owner.toLowerCase()}/${repo.toLowerCase()}`);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const result = request.result;
+        // Keep cache valid for 7 days
+        if (result && (Date.now() - result.timestamp < 7 * 24 * 60 * 60 * 1000)) {
+          resolve(result.graphData);
+        } else {
+          resolve(null);
+        }
+      };
+    });
+  } catch (e) {
+    console.error("Failed to read from IndexedDB", e);
+    return null;
+  }
+};
+
+const cacheGraph = async (owner: string, repo: string, graphData: any): Promise<void> => {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.put({
+        key: `${owner.toLowerCase()}/${repo.toLowerCase()}`,
+        graphData,
+        timestamp: Date.now()
+      });
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  } catch (e) {
+    console.error("Failed to write to IndexedDB", e);
+  }
+};
+
+// ============================================================================
+// FETCH WITH PROGRESS TRACKING
+// ============================================================================
+const fetchWithProgress = async (
+  url: string,
+  onProgress: (loaded: number, total: number) => void
+): Promise<Response> => {
+  const response = await fetch(url);
+  if (!response.ok || !response.body) return response;
+
+  const contentLength = response.headers.get("content-length");
+  const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+  let loaded = 0;
+  const reader = response.body.getReader();
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            break;
+          }
+          loaded += value.byteLength;
+          onProgress(loaded, total);
+          controller.enqueue(value);
+        }
+      } catch (err) {
+        controller.error(err);
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText
+  });
+};
+
+interface JSDelivrFile {
+  name: string;
+  type: "file" | "directory";
+  size?: number;
+  files?: JSDelivrFile[];
+}
+
+const flattenJSDelivrTree = (items: JSDelivrFile[], currentPath = ""): string[] => {
+  let filePaths: string[] = [];
+  for (const item of items) {
+    const itemPath = currentPath ? `${currentPath}/${item.name}` : item.name;
+    if (item.type === "file") {
+      filePaths.push(itemPath);
+    } else if (item.type === "directory" && item.files) {
+      filePaths.push(...flattenJSDelivrTree(item.files, itemPath));
+    }
+  }
+  return filePaths;
+};
+
+const getJSDelivrTotalSize = (items: JSDelivrFile[]): number => {
+  let total = 0;
+  for (const item of items) {
+    if (item.type === "file" && item.size) {
+      total += item.size;
+    } else if (item.type === "directory" && item.files) {
+      total += getJSDelivrTotalSize(item.files);
+    }
+  }
+  return total;
+};
+
 const Explore = () => {
   const [searchParams] = useSearchParams();
   const { owner, repo } = useParams();
@@ -69,12 +206,15 @@ const Explore = () => {
   const bundleUrl = searchParams.get("bundle_url") || "";
   
   // Helper to fetch files using a sequential pool of robust CORS proxies
-  const fetchWithFallbackProxies = async (url: string): Promise<Response> => {
+  const fetchWithFallbackProxies = async (
+    url: string,
+    onProgress?: (loaded: number, total: number) => void
+  ): Promise<Response> => {
     if (!url) throw new Error("URL is empty");
     
     // Try direct fetch first (essential for localhost, relative URLs, or CORS-enabled endpoints)
     try {
-      const res = await fetch(url);
+      const res = onProgress ? await fetchWithProgress(url, onProgress) : await fetch(url);
       if (res.ok) return res;
     } catch (e) {
       console.warn("Direct fetch failed, falling back to CORS proxies...", e);
@@ -87,7 +227,7 @@ const Explore = () => {
         const [_, ownerName, repoName, branch, filepath] = match;
         const jsdelivrUrl = `https://cdn.jsdelivr.net/gh/${ownerName}/${repoName}@${branch}/${filepath}`;
         try {
-          const res = await fetch(jsdelivrUrl);
+          const res = onProgress ? await fetchWithProgress(jsdelivrUrl, onProgress) : await fetch(jsdelivrUrl);
           if (res.ok) return res;
         } catch (e) {
           console.warn("jsDelivr CDN fetch failed, falling back to CORS proxies...", e);
@@ -109,7 +249,7 @@ const Explore = () => {
       try {
         const proxiedUrl = proxy(url);
         console.log(`[Proxy] Attempting fetch: ${proxiedUrl}`);
-        const res = await fetch(proxiedUrl);
+        const res = onProgress ? await fetchWithProgress(proxiedUrl, onProgress) : await fetch(proxiedUrl);
         if (res.ok) return res;
         if (res.status === 403 || res.status === 429) {
           console.warn(`[Proxy] Status ${res.status} received. Trying next proxy...`);
@@ -135,49 +275,138 @@ const Explore = () => {
       setLoading(true);
       setError(null);
       
+      // 1. Try to load from IndexedDB cache first
+      try {
+        const cached = await getCachedGraph(owner, repo);
+        if (cached) {
+          setProgressText("Loading cached codebase graph...");
+          setProgressValue(90);
+          await new Promise((r) => setTimeout(r, 100));
+          setGraphData(cached);
+          setProgressText("Complete!");
+          setProgressValue(100);
+          setLoading(false);
+          console.log(`[Cache] Loaded repository graph for ${owner}/${repo} from IndexedDB cache.`);
+          return;
+        }
+      } catch (cacheErr) {
+        console.warn("[Cache] Error reading from cache:", cacheErr);
+      }
+
       let files: any[] = [];
       let fileContents: Record<string, string> = {};
-      let method2Success = false;
+
+      // Estimate the repository size using jsDelivr API (Rate-limit free)
+      let estimatedZipSize = 4 * 1024 * 1024; // Default to 4MB estimate
+      let isEstimateReliable = false;
+      try {
+        console.log("[Explore] Fetching repo metadata to estimate ZIP download size...");
+        const jsdelivrMetaUrl = `https://data.jsdelivr.com/v1/packages/gh/${owner}/${repo}@main`;
+        const metaRes = await fetch(jsdelivrMetaUrl);
+        let metaData;
+        if (metaRes.ok) {
+          metaData = await metaRes.json();
+        } else {
+          const fallbackMetaUrl = `https://data.jsdelivr.net/v1/packages/gh/${owner}/${repo}@master`;
+          const fallbackRes = await fetch(fallbackMetaUrl);
+          if (fallbackRes.ok) {
+            metaData = await fallbackRes.json();
+          }
+        }
+        if (metaData && Array.isArray(metaData.files)) {
+          const uncompressedSize = getJSDelivrTotalSize(metaData.files);
+          if (uncompressedSize > 0) {
+            estimatedZipSize = Math.max(500 * 1024, uncompressedSize * 0.22); // Assume 22% average compression
+            isEstimateReliable = true;
+            console.log(`[Explore] Estimated ZIP size: ${(estimatedZipSize / 1024 / 1024).toFixed(2)} MB (based on ${(uncompressedSize / 1024 / 1024).toFixed(2)} MB uncompressed)`);
+          }
+        }
+      } catch (err) {
+        console.warn("[Explore] Failed to estimate ZIP size:", err);
+      }
 
       try {
-        // --- METHOD 1: ZIP ARCHIVE FLOW (PRIMARY & HIGHLY OPTIMIZED) ---
-        setProgressText("Downloading repository zip archive (highly optimized)...");
+        // --- METHOD 1: ZIP ARCHIVE FLOW (PRIMARY) ---
+        setProgressText("Downloading repository archive...");
         setProgressValue(10);
         
         let response = null;
 
-        // TIER 1: Standard Web Archive ZIP (Rate-Limit Free) via CORS Proxies
+        const updateDownloadProgress = (loaded: number, total: number) => {
+          const mbLoaded = (loaded / 1024 / 1024).toFixed(2);
+          const finalTotal = total > 0 ? total : estimatedZipSize;
+          
+          let pct = 0;
+          if (loaded < finalTotal) {
+            pct = Math.round((loaded / finalTotal) * 90);
+          } else {
+            const overflow = loaded - finalTotal;
+            const extraPct = 9 * (1 - Math.exp(-overflow / (1024 * 1024 * 5))); // 5MB half-life
+            pct = Math.round(90 + extraPct);
+          }
+
+          if (total > 0) {
+            setProgressText(`Downloading repository archive: ${pct}% (${mbLoaded} MB of ${(total / 1024 / 1024).toFixed(2)} MB)`);
+          } else if (isEstimateReliable) {
+            setProgressText(`Downloading repository archive: ${pct}% (${mbLoaded} MB of ~${(estimatedZipSize / 1024 / 1024).toFixed(2)} MB)`);
+          } else {
+            setProgressText(`Downloading repository archive: ${pct}% (${mbLoaded} MB, size unknown)`);
+          }
+          setProgressValue(10 + Math.floor(pct * 0.15));
+        };
+
+        // TIER 1: Same-Origin Serverless Rewrite / Dev Proxy (Fastest & CORS-Free)
         try {
-          console.log("[Explore] Tier 1: Fetching standard web ZIP archive via proxies...");
-          const zipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/main.zip`;
-          response = await fetchWithFallbackProxies(zipUrl);
+          console.log("[Explore] Tier 1: Fetching zip archive via same-origin rewrite...");
+          const zipUrl = `/api/github-zip/${owner}/${repo}/main`;
+          response = await fetchWithProgress(zipUrl, updateDownloadProgress);
           if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
+          
+          const contentType = response.headers.get("content-type") || "";
+          if (contentType.includes("text/html") || contentType.includes("application/json")) {
+            throw new Error("Local proxy returned HTML/JSON instead of binary zip data");
+          }
         } catch (err1) {
-          console.warn("[Explore] Tier 1 main.zip failed, trying master.zip...", err1);
+          console.warn("[Explore] Tier 1 same-origin main zip failed, trying master...", err1);
           try {
-            const fallbackZipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/master.zip`;
-            response = await fetchWithFallbackProxies(fallbackZipUrl);
+            const fallbackZipUrl = `/api/github-zip/${owner}/${repo}/master`;
+            response = await fetchWithProgress(fallbackZipUrl, updateDownloadProgress);
             if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
+            
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("text/html") || contentType.includes("application/json")) {
+              throw new Error("Local proxy returned HTML/JSON instead of binary zip data");
+            }
           } catch (err2) {
-            console.warn("[Explore] Tier 1 master.zip failed as well.", err2);
+            console.warn("[Explore] Tier 1 same-origin master zip failed, falling back to public CORS proxies...", err2);
           }
         }
 
-        // TIER 2: If Tier 1 failed, fallback to REST API Zipball (Direct / Proxied)
+        // TIER 2: Fallback to public CORS Proxies (Standard Web Archive)
         if (!response || !response.ok) {
-          console.log("[Explore] Tier 2: Falling back to REST API Zipball...");
+          console.log("[Explore] Tier 2: Falling back to public CORS proxies...");
           try {
-            const apiZipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/main`;
-            response = await fetchWithFallbackProxies(apiZipUrl);
+            const zipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/main.zip`;
+            response = await fetchWithFallbackProxies(zipUrl, updateDownloadProgress);
             if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
+            
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("text/html") || contentType.includes("application/json")) {
+              throw new Error("Proxy returned HTML/JSON instead of binary zip data");
+            }
           } catch (err3) {
-            console.warn("[Explore] Tier 2 main zipball failed, trying master zipball...", err3);
+            console.warn("[Explore] Tier 2 fallback main.zip failed, trying master.zip...", err3);
             try {
-              const fallbackApiZipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/master`;
-              response = await fetchWithFallbackProxies(fallbackApiZipUrl);
+              const fallbackZipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/master.zip`;
+              response = await fetchWithFallbackProxies(fallbackZipUrl, updateDownloadProgress);
               if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
+              
+              const contentType = response.headers.get("content-type") || "";
+              if (contentType.includes("text/html") || contentType.includes("application/json")) {
+                throw new Error("Proxy returned HTML/JSON instead of binary zip data");
+              }
             } catch (err4) {
-              console.error("[Explore] Tier 2 master zipball failed as well.", err4);
+              console.error("[Explore] Tier 2 fallback master.zip failed as well.", err4);
               throw new Error("All ZIP download tiers failed.");
             }
           }
@@ -198,7 +427,6 @@ const Explore = () => {
           ) {
             promises.push(
               entry.async("text").then((content) => {
-                // Strip the GitHub zipball root folder segment (e.g. "owner-repo-commitHash/")
                 const cleanPath = path.substring(path.indexOf("/") + 1);
                 files.push({ path: cleanPath, content });
               })
@@ -217,53 +445,86 @@ const Explore = () => {
         for (const f of files) {
           fileContents[f.path] = f.content;
         }
-
-        method2Success = true;
         console.log(`[ZIP Flow] Successfully downloaded and extracted ${files.length} files.`);
-        
+
       } catch (zipErr: any) {
-        console.warn("[ZIP Flow] Failed, falling back to CDN individual file downloads...", zipErr);
+        console.warn("[ZIP Flow] Failed, falling back to CDN individual file pipeline...", zipErr);
         files = [];
         fileContents = {};
 
         // --- METHOD 2: FALLBACK FAST CDN FLOW ---
-        setProgressText("Fetching repository structure from GitHub...");
+        setProgressText("Fetching repository structure (fallback)...");
         setProgressValue(5);
         
-        let treeResponse: Response;
+        let filesList: string[] = [];
         let activeBranch = "main";
-        
+
+        // TIER 1: Try jsDelivr Data API first
         try {
-          treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=true`);
-          if (!treeResponse.ok) throw new Error("main branch not found or rate limited");
+          console.log("[Explore] Fallback Tier 1: Attempting to list repository files via jsDelivr API...");
+          const jsdelivrMetaUrl = `https://data.jsdelivr.net/v1/packages/gh/${owner}/${repo}@main`;
+          const metaRes = await fetch(jsdelivrMetaUrl);
+          if (!metaRes.ok) throw new Error("main branch not cached or not found on jsDelivr");
+          const metaData = await metaRes.json();
+          if (metaData && Array.isArray(metaData.files)) {
+            filesList = flattenJSDelivrTree(metaData.files);
+            console.log(`[Explore] Successfully resolved ${filesList.length} files from jsDelivr API (@main).`);
+          }
         } catch (e) {
-          activeBranch = "master";
-          treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=true`);
-          if (!treeResponse.ok) {
-            throw new Error(`Failed to fetch tree from GitHub REST API (Status ${treeResponse.status})`);
+          console.warn("[Explore] Fallback Tier 1 jsDelivr @main failed, trying @master...", e);
+          try {
+            const jsdelivrMetaUrl = `https://data.jsdelivr.net/v1/packages/gh/${owner}/${repo}@master`;
+            const metaRes = await fetch(jsdelivrMetaUrl);
+            if (!metaRes.ok) throw new Error("master branch not cached or not found on jsDelivr");
+            const metaData = await metaRes.json();
+            if (metaData && Array.isArray(metaData.files)) {
+              filesList = flattenJSDelivrTree(metaData.files);
+              activeBranch = "master";
+              console.log(`[Explore] Successfully resolved ${filesList.length} files from jsDelivr API (@master).`);
+            }
+          } catch (e2) {
+            console.warn("[Explore] Fallback Tier 1 jsDelivr failed entirely.", e2);
           }
         }
-        
-        const treeData = await treeResponse.json();
-        if (!treeData || !Array.isArray(treeData.tree)) {
-          throw new Error("Invalid tree data received from GitHub");
+
+        // TIER 2: Fallback to GitHub REST API
+        if (filesList.length === 0) {
+          console.log("[Explore] Fallback Tier 2: Fetching structure from GitHub REST API...");
+          let treeResponse: Response;
+          try {
+            treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=true`);
+            if (!treeResponse.ok) throw new Error("main branch not found or rate limited");
+          } catch (e) {
+            activeBranch = "master";
+            treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=true`);
+            if (!treeResponse.ok) {
+              throw new Error(`Failed to fetch tree from GitHub REST API (Status ${treeResponse.status})`);
+            }
+          }
+          const treeData = await treeResponse.json();
+          if (treeData && Array.isArray(treeData.tree)) {
+            filesList = treeData.tree
+              .filter((item: any) => item.type === "blob")
+              .map((item: any) => item.path);
+            console.log(`[Explore] Resolved ${filesList.length} files from GitHub REST API.`);
+          }
         }
-        
+
         // Filter files matching our source-code pattern
-        const candidateFiles = treeData.tree.filter((item: any) => 
-          item.type === "blob" &&
-          item.path.match(/\.(js|ts|jsx|tsx|py|c|h|cpp|hpp|cc|cs|go|rs|rb|php|swift|kt|kts|dart)$/) &&
-          !isPathIgnored(item.path)
+        const candidatePaths = filesList.filter((path) => 
+          path.match(/\.(js|ts|jsx|tsx|py|c|h|cpp|hpp|cc|cs|go|rs|rb|php|swift|kt|kts|dart)$/) &&
+          !isPathIgnored(path)
         );
         
-        if (candidateFiles.length === 0) {
-          throw new Error("No parseable code files found in the repository tree.");
+        if (candidatePaths.length === 0) {
+          throw new Error("No parseable code files found in the repository.");
         }
+
+        const candidateFiles = candidatePaths.map(p => ({ path: p }));
         
         setProgressText(`Found ${candidateFiles.length} code files. Downloading in parallel...`);
         setProgressValue(15);
         
-        // Download files in parallel with paced batching to avoid overloading browser connections
         const BATCH_SIZE = 15;
         let downloadedCount = 0;
         
@@ -280,7 +541,6 @@ const Explore = () => {
                 files.push({ path: file.path, content });
                 fileContents[file.path] = content;
               } catch (err) {
-                // If jsDelivr fails, try a direct raw github fallback
                 try {
                   const fallbackUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${activeBranch}/${file.path}`;
                   const fileRes = await fetch(fallbackUrl);
@@ -304,6 +564,7 @@ const Explore = () => {
         if (files.length === 0) {
           throw new Error("Failed to download any code files from the CDN.");
         }
+        console.log(`[CDN Flow] Successfully downloaded ${files.length} files from CDN.`);
       }
 
       // --- COMMON SEMANTIC INDEXING PHASE ---
@@ -324,7 +585,16 @@ const Explore = () => {
         setProgressValue(100);
         await new Promise((r) => setTimeout(r, 450));
         
-        setGraphData({ ...graphData, fileContents });
+        const finalGraphData = { ...graphData, fileContents };
+        setGraphData(finalGraphData);
+        
+        // Cache the newly indexed graph data to IndexedDB
+        try {
+          await cacheGraph(owner, repo, finalGraphData);
+          console.log(`[Cache] Successfully cached repository graph for ${owner}/${repo} in IndexedDB.`);
+        } catch (cacheErr) {
+          console.warn("[Cache] Failed to save graph to IndexedDB:", cacheErr);
+        }
       } catch (err: any) {
         console.error("Auto-Index Error:", err);
         setError(err.message);
@@ -345,11 +615,26 @@ const Explore = () => {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetchWithFallbackProxies(bundleUrl);
+        setProgressText("Downloading bundle...");
+        setProgressValue(5);
+        
+        const response = await fetchWithFallbackProxies(bundleUrl, (loaded, total) => {
+          const mbLoaded = (loaded / 1024 / 1024).toFixed(2);
+          if (total > 0) {
+            const pct = Math.round((loaded / total) * 100);
+            setProgressText(`Downloading bundle: ${pct}% (${mbLoaded} MB)`);
+            setProgressValue(5 + Math.floor(pct * 0.45)); // maps 0-100% to 5-50% progress bar
+          } else {
+            setProgressText(`Downloading bundle: ${mbLoaded} MB...`);
+          }
+        });
+        
         if (!response.ok) {
           throw new Error(`Failed to fetch bundle from URL (${response.status})`);
         }
         
+        setProgressText("Unzipping bundle in-memory...");
+        setProgressValue(55);
         const buffer = await response.arrayBuffer();
         const jszip = await JSZip.loadAsync(buffer);
         
