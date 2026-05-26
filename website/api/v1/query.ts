@@ -8,10 +8,8 @@ import { createClient } from "@supabase/supabase-js";
  * We must ALWAYS return 200 — even when the browser tunnel is unreachable.
  * The offline payload gives ChatGPT enough context to tell the user what to do.
  */
-function offlineResponse(query_type: string, cleanRepo: string) {
-  const openUrl = cleanRepo
-    ? `https://cgc.codes/${cleanRepo}`
-    : "https://cgc.codes/explore";
+function offlineResponse(query_type: string) {
+  const openUrl = "https://cgc.codes/explore";
 
   const base = {
     status: "offline",
@@ -22,14 +20,14 @@ function offlineResponse(query_type: string, cleanRepo: string) {
     case "list_indexed_repositories":
       return { ...base, indexed_repositories: [] };
     case "get_repository_stats":
-      return { ...base, repository: cleanRepo, total_nodes: 0, total_links: 0, files_count: 0, classes_count: 0, functions_count: 0 };
+      return { ...base, total_nodes: 0, total_links: 0, files_count: 0, classes_count: 0, functions_count: 0 };
     case "find_dead_code":
-      return { ...base, repository: cleanRepo, dead_symbols: [], total_dead_symbols: 0 };
+      return { ...base, dead_symbols: [], total_dead_symbols: 0 };
     case "calculate_cyclomatic_complexity":
     case "find_most_complex_functions":
-      return { ...base, repository: cleanRepo, most_complex_functions: [] };
+      return { ...base, most_complex_functions: [] };
     case "analyze_code_relationships":
-      return { ...base, repository: cleanRepo, relationships_count: 0, connected_nodes: [], connected_links: [] };
+      return { ...base, relationships_count: 0, connected_nodes: [], connected_links: [] };
     case "search_registry_bundles":
       return { ...base, results: [] };
     case "definitions":
@@ -87,7 +85,6 @@ export default async function handler(req: any, res: any) {
   const wasmQueries = ["definitions", "callers", "callees", "file_structure", "search", "cypher"];
   const isWasmQuery = wasmQueries.includes(query_type);
 
-  const cleanRepo = repo ? String(repo).trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//, "").replace(/\/$/, "") : "";
   const sessionToken = session_id ? String(session_id).trim().toLowerCase() : "";
 
   if (!sessionToken) {
@@ -141,7 +138,7 @@ export default async function handler(req: any, res: any) {
           id: requestId,
           queryType: query_type,
           target: target || cypher_query || "",
-          params: { cypher_query, repo: cleanRepo }
+          params: { cypher_query, repo }
         }
       });
 
@@ -161,11 +158,11 @@ export default async function handler(req: any, res: any) {
 
       // NEVER return 4xx for offline — ChatGPT maps every non-2xx to ClientResponseError
       if (!hasResponded) {
-        return res.status(200).json(offlineResponse(query_type, cleanRepo));
+        return res.status(200).json(offlineResponse(query_type));
       }
 
       if (wasmResponse?.status === "success") {
-        return res.status(200).json(wasmResponse.result ?? offlineResponse(query_type, cleanRepo));
+        return res.status(200).json(wasmResponse.result ?? offlineResponse(query_type));
       }
 
       // WASM execution error in the browser — still 200 so ChatGPT reads the error text
@@ -201,7 +198,7 @@ export default async function handler(req: any, res: any) {
       // 300ms propagation buffer — balances tab-wake latency vs Vercel's 10s function cap
       await new Promise<void>((resolve) => setTimeout(resolve, 300));
 
-      const toolArgs = { repo: cleanRepo, ...params };
+      const toolArgs = { repo, ...params };
 
       const sendStatus = await channel.send({
         type: "broadcast",
@@ -224,7 +221,7 @@ export default async function handler(req: any, res: any) {
 
       // NEVER return 4xx for offline — ChatGPT maps every non-2xx to ClientResponseError
       if (!hasResponded) {
-        return res.status(200).json(offlineResponse(query_type, cleanRepo));
+        return res.status(200).json(offlineResponse(query_type));
       }
 
       if (toolResponse?.status === "error") {
@@ -239,7 +236,7 @@ export default async function handler(req: any, res: any) {
       // Guard: res.json(undefined) produces `{}` which ChatGPT misreads as ClientResponseError
       const toolResult = toolResponse?.result;
       if (toolResult === undefined || toolResult === null) {
-        return res.status(200).json(offlineResponse(query_type, cleanRepo));
+        return res.status(200).json(offlineResponse(query_type));
       }
 
       return res.status(200).json(toolResult);

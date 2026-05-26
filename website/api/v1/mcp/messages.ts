@@ -252,7 +252,6 @@ export default async function handler(req: any, res: any) {
           });
         }
 
-        const cleanRepo = repo ? String(repo).trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//, "").replace(/\/$/, "") : "";
         const sessionToken = session_id ? String(session_id).trim().toLowerCase() : "";
 
         if (!sessionToken) {
@@ -343,7 +342,7 @@ export default async function handler(req: any, res: any) {
               isError: true,
               content: [{
                 type: "text",
-                text: `Error: The Browser-as-a-Server dashboard for '${cleanRepo}' is currently closed.\n\nTo enable Claude to run your Python tools, please open https://codegraphcontext.vercel.app in an active browser tab.`
+                text: "Error: The Browser-as-a-Server dashboard is currently offline.\n\nTo enable ChatGPT to run your code intelligence tools, please open https://cgc.codes/explore in an active browser tab."
               }]
             }
           });
