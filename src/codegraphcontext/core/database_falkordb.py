@@ -232,16 +232,23 @@ class FalkorDBManager:
         info_logger("Starting FalkorDB Lite worker subprocess...")
         self._process = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
-        # 3. Wait for Readiness
+        # 3. Wait for Readiness. The Unix socket can appear before Redis has
+        # loaded the FalkorDB module, so validate GRAPH.QUERY instead of
+        # treating socket creation alone as ready.
         start_time = time.time()
         timeout = 20 # seconds
+        last_error = None
         
         while time.time() - start_time < timeout:
             if os.path.exists(self.socket_path):
-                # Socket created!
-                # Give it a tiny sleep to ensure listening
-                time.sleep(0.2)
-                return
+                try:
+                    from falkordb import FalkorDB
+                    d = FalkorDB(unix_socket_path=self.socket_path)
+                    test_graph = d.select_graph('__cgc_health_check')
+                    test_graph.query("RETURN 1")
+                    return
+                except Exception as e:
+                    last_error = e
             
             # Check if process died
             if self._process.poll() is not None:
@@ -258,7 +265,7 @@ class FalkorDBManager:
             
             time.sleep(0.5)
             
-        raise RuntimeError("Timed out waiting for FalkorDB Lite to start.")
+        raise RuntimeError(f"Timed out waiting for FalkorDB Lite to start. Last error: {last_error}")
 
     def close_driver(self):
         """Closes the connection."""
