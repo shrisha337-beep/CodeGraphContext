@@ -99,7 +99,7 @@ jobs:
 
             // Consolidated helper function to update project status, adding the issue/PR to the project if not present
             async function updateProjectStatus(targetStatusName) {
-              const projectNumber = 3; // The project number from settings
+              const projectNumber = 3;
               const org = context.repo.owner;
 
               console.log(`Attempting to update project #${projectNumber} Status field to "${targetStatusName}"...`);
@@ -129,45 +129,10 @@ jobs:
                 }
                 console.log(`Found Status option: "${targetOption.name}" (ID: ${targetOption.id})`);
 
-                // 3. Find if the issue/PR is already an item in project #3
-                const checkQuery = `
-                  query($nodeId: ID!) {
-                    node(id: $nodeId) {
-                      ... on Issue {
-                        projectItems(first: 10) {
-                          nodes {
-                            id
-                            project {
-                              id
-                              number
-                            }
-                          }
-                        }
-                      }
-                      ... on PullRequest {
-                        projectItems(first: 10) {
-                          nodes {
-                            id
-                            project {
-                              id
-                              number
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                `;
-                const checkResult = await github.graphql(checkQuery, { nodeId: contentId });
-                const existingItems = checkResult.node?.projectItems?.nodes || [];
-                const matchedItem = existingItems.find(item => item.project.number === projectNumber);
-
+                // 3. Get the item ID — try addProjectV2ItemById first (idempotent: returns existing item if already present)
                 let itemId = null;
-                if (matchedItem) {
-                  itemId = matchedItem.id;
-                  console.log(`Item already in project #${projectNumber}. Item ID: ${itemId}`);
-                } else {
-                  console.log(`Item not in project #${projectNumber}. Adding to project...`);
+                try {
+                  console.log('Attempting addProjectV2ItemById (idempotent)...');
                   const addMutation = `
                     mutation($projectId: ID!, $contentId: ID!) {
                       addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
@@ -179,11 +144,66 @@ jobs:
                   `;
                   const addResult = await github.graphql(addMutation, { projectId: project.id, contentId });
                   itemId = addResult.addProjectV2ItemById?.item?.id;
-                  if (!itemId) {
-                    console.error('Failed to add item to project board.');
-                    return false;
+                  if (itemId) {
+                    console.log(`Got item ID via addProjectV2ItemById: ${itemId}`);
                   }
-                  console.log(`Successfully added item to project. New Item ID: ${itemId}`);
+                } catch (addError) {
+                  console.warn(`addProjectV2ItemById failed (likely permissions): ${addError.message}`);
+                  console.log('Falling back to scanning project items...');
+                }
+
+                // Fallback: scan the project's items to find the one matching our content
+                if (!itemId) {
+                  const itemsQuery = `
+                    query($projectId: ID!, $cursor: String) {
+                      node(id: $projectId) {
+                        ... on ProjectV2 {
+                          items(first: 100, after: $cursor) {
+                            pageInfo {
+                              hasNextPage
+                              endCursor
+                            }
+                            nodes {
+                              id
+                              content {
+                                ... on Issue {
+                                  id
+                                }
+                                ... on PullRequest {
+                                  id
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `;
+
+                  let cursor = null;
+                  let found = false;
+                  for (let page = 0; page < 10 && !found; page++) {
+                    const result = await github.graphql(itemsQuery, { projectId: project.id, cursor });
+                    const items = result.node?.items?.nodes || [];
+                    for (const item of items) {
+                      if (item.content?.id === contentId) {
+                        itemId = item.id;
+                        found = true;
+                        console.log(`Found existing item in project by scanning: ${itemId}`);
+                        break;
+                      }
+                    }
+                    if (!found && result.node?.items?.pageInfo?.hasNextPage) {
+                      cursor = result.node.items.pageInfo.endCursor;
+                    } else {
+                      break;
+                    }
+                  }
+                }
+
+                if (!itemId) {
+                  console.error('Could not find or add item to project board.');
+                  return false;
                 }
 
                 // 4. Update the Status field value
