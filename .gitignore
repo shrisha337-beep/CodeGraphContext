@@ -94,3 +94,5 @@ target/
 venv_indexing/
 scratch/
 scripts/.agents/
+scripts
+.agents

@@ -1,0 +1,227 @@
+name: Route Issues
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      repository-projects: write
+
+    steps:
+      - name: Route issue based on labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labelName = context.payload.label.name;
+            const label = labelName.toLowerCase();
+            const isPullRequest = !!context.payload.issue.pull_request;
+
+            console.log(`Processing label: "${labelName}"`);
+            console.log(`Associated with PR? ${isPullRequest}`);
+
+            // 1. Handle "blocked" label
+            if (label === 'blocked') {
+              console.log('Detected "blocked" label. Attempting to update project field to Blocked...');
+              try {
+                const query = `
+                  query($nodeId: ID!) {
+                    node(id: $nodeId) {
+                      ... on Issue {
+                        projectItems(first: 10) {
+                          nodes {
+                            id
+                            project {
+                              id
+                              title
+                              fields(first: 50) {
+                                nodes {
+                                  ... on ProjectV2FieldCommon {
+                                    id
+                                    name
+                                    dataType
+                                  }
+                                  ... on ProjectV2SingleSelectField {
+                                    id
+                                    name
+                                    options {
+                                      id
+                                      name
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+
+                const variables = { nodeId: context.payload.issue.node_id };
+                const result = await github.graphql(query, variables);
+                const projectItems = result.node?.projectItems?.nodes || [];
+
+                if (projectItems.length === 0) {
+                  console.log('No projects associated with this issue.');
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    body: '⚠️ This issue was labeled as **blocked**, but no associated GitHub Projects were found to update status.'
+                  });
+                } else {
+                  for (const item of projectItems) {
+                    console.log(`Found project: "${item.project.title}" (ID: ${item.project.id})`);
+                    
+                    // Find single-select Status field
+                    const statusField = item.project.fields.nodes.find(
+                      f => f.name.toLowerCase() === 'status' && f.options
+                    );
+
+                    if (statusField) {
+                      const blockedOption = statusField.options.find(
+                        opt => opt.name.toLowerCase() === 'blocked'
+                      );
+
+                      if (blockedOption) {
+                        console.log(`Found option "Blocked" (ID: ${blockedOption.id}) on field "${statusField.name}"`);
+                        
+                        const mutation = `
+                          mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                            updateProjectV2ItemFieldValue(
+                              input: {
+                                projectId: $projectId
+                                itemId: $itemId
+                                fieldId: $fieldId
+                                value: {
+                                  singleSelectOptionId: $optionId
+                                }
+                              }
+                            ) {
+                              projectV2Item {
+                                id
+                              }
+                            }
+                          }
+                        `;
+
+                        await github.graphql(mutation, {
+                          projectId: item.project.id,
+                          itemId: item.id,
+                          fieldId: statusField.id,
+                          optionId: blockedOption.id
+                        });
+                        console.log('Successfully updated status to Blocked.');
+
+                        await github.rest.issues.createComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          issue_number: context.issue.number,
+                          body: `🚦 Updated Project Status to **Blocked** in project **${item.project.title}**.`
+                        });
+                      } else {
+                        console.warn('No option named "Blocked" found in the Status field.');
+                      }
+                    } else {
+                      console.warn('No single-select field named "Status" found in the project.');
+                    }
+                  }
+                }
+              } catch (error) {
+                console.error(`Error updating project field: ${error.message}`);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `⚠️ Attempted to update Project Status to **Blocked**, but encountered an error: \`${error.message}\`. Please ensure the action runner has project permissions and a "Status" field with a "Blocked" option exists.`
+                });
+              }
+            }
+
+            // 2. Handle team roles assignment based on docs/TEAM_ROLES.md
+            let teamName = null;
+            let teamSlug = null;
+
+            if (label === 'adminarchs' || label === 'admin-archs') {
+              teamName = 'AdminArchs (Senior Maintainers & Core Architecture)';
+              teamSlug = 'adminarchs';
+            } else if (label === 'pythondevs' || label === 'python-devs' || label === 'backend') {
+              teamName = 'PythonDevs (Core Engine Developers)';
+              teamSlug = 'pythondevs';
+            } else if (label === 'aidevs' || label === 'ai-devs') {
+              teamName = 'AIDevs (AI & Machine Learning Integration)';
+              teamSlug = 'aidevs';
+            } else if (label === 'webdevs' || label === 'web-devs' || label === 'frontend') {
+              teamName = 'WebDevs (Frontend & UI/UX)';
+              teamSlug = 'webdevs';
+            } else if (label === 'extensiondevs' || label === 'extension-devs') {
+              teamName = 'ExtensionDevs (IDE & Browser Integrations)';
+              teamSlug = 'extensiondevs';
+            } else if (label === 'docsexperts' || label === 'docs-experts' || label === 'docs') {
+              teamName = 'DocsExperts (Technical Writing & DevRel)';
+              teamSlug = 'docsexperts';
+            } else if (label === 'testers' || label === 'qa') {
+              teamName = 'Testers (QA & Benchmarking)';
+              teamSlug = 'testers';
+            }
+
+            if (teamSlug) {
+              console.log(`Routing to team: "${teamName}" (Slug: ${teamSlug})`);
+              
+              // Tag the team via comment
+              const commentBody = `Assigning to the **${teamName}** team.\nCC: @${context.repo.owner}/${teamSlug}`;
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: commentBody
+                });
+                console.log('Successfully posted routing comment.');
+              } catch (error) {
+                console.error(`Failed to post comment: ${error.message}`);
+              }
+
+              // Request review if it's a Pull Request (via issue event payload, if applicable)
+              if (isPullRequest) {
+                try {
+                  await github.rest.pulls.requestReviewers({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    team_reviewers: [teamSlug]
+                  });
+                  console.log(`Requested review from team: ${teamSlug}`);
+                } catch (error) {
+                  console.warn(`Could not request team review (non-fatal): ${error.message}`);
+                }
+              }
+
+              // Attempt to assign the team's members to the issue
+              try {
+                const membersResponse = await github.rest.teams.listMembersInOrg({
+                  org: context.repo.owner,
+                  team_slug: teamSlug
+                });
+                const members = membersResponse.data.map(m => m.login);
+                if (members.length > 0) {
+                  await github.rest.issues.addAssignees({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    assignees: members
+                  });
+                  console.log(`Assigned team members: ${members.join(', ')}`);
+                } else {
+                  console.log('No members found in this team to assign.');
+                }
+              } catch (error) {
+                console.warn(`Could not automatically assign team members (non-fatal): ${error.message}`);
+              }
+            }
