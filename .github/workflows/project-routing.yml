@@ -25,13 +25,14 @@ jobs:
           github-token: ${{ secrets.ROUTE_ISSUES_PAT || github.token }}
           script: |
             const labelName = context.payload.label.name;
+            const label = labelName.toLowerCase();
             const isPullRequest = !!context.payload.issue.pull_request;
 
             console.log(`Processing label: "${labelName}"`);
             console.log(`Associated with PR? ${isPullRequest}`);
 
             // 1. Handle "blocked" label
-            if (labelName === 'blocked') {
+            if (label === 'blocked') {
               console.log('Detected "blocked" label. Attempting to update project field to Blocked...');
               try {
                 const query = `
@@ -150,29 +151,29 @@ jobs:
               }
             }
 
-            // 2. Handle team roles assignment based on docs/TEAM_ROLES.md (exact label names)
+            // 2. Handle team roles assignment based on docs/TEAM_ROLES.md (case-insensitive exact names)
             let teamName = null;
             let teamSlug = null;
 
-            if (labelName === 'AdminArchs') {
+            if (label === 'adminarchs') {
               teamName = 'AdminArchs (Senior Maintainers & Core Architecture)';
               teamSlug = 'adminarchs';
-            } else if (labelName === 'PythonDevs') {
+            } else if (label === 'pythondevs') {
               teamName = 'PythonDevs (Core Engine Developers)';
               teamSlug = 'pythondevs';
-            } else if (labelName === 'AIDevs') {
+            } else if (label === 'aidevs') {
               teamName = 'AIDevs (AI & Machine Learning Integration)';
               teamSlug = 'aidevs';
-            } else if (labelName === 'WebDevs') {
+            } else if (label === 'webdevs') {
               teamName = 'WebDevs (Frontend & UI/UX)';
               teamSlug = 'webdevs';
-            } else if (labelName === 'ExtensionDevs') {
+            } else if (label === 'extensiondevs') {
               teamName = 'ExtensionDevs (IDE & Browser Integrations)';
               teamSlug = 'extensiondevs';
-            } else if (labelName === 'DocsExperts') {
+            } else if (label === 'docsexperts') {
               teamName = 'DocsExperts (Technical Writing & DevRel)';
               teamSlug = 'docsexperts';
-            } else if (labelName === 'Testers') {
+            } else if (label === 'testers') {
               teamName = 'Testers (QA & Benchmarking)';
               teamSlug = 'testers';
             }
