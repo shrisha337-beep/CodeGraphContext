@@ -13,20 +13,28 @@ _FORBIDDEN_KEYWORDS = (
     "DROP",
     "LOAD",
     "FOREACH",
+    "ALTER",
+    "COPY",
+    "INSERT",
+    "UPDATE",
+    "TRUNCATE",
+    "GRANT",
+    "REVOKE",
 )
 _FORBIDDEN_PATTERNS = (
     re.compile(r"CALL\s+apoc\b", re.IGNORECASE),
+    re.compile(r"CALL\s+dbms\b", re.IGNORECASE),
+    re.compile(r"CALL\s+db\.[a-z0-9_.]*\.(?:create|drop|delete|set|add|remove|alter)\b", re.IGNORECASE),
+    re.compile(r"CALL\s+db\.[a-z0-9_.]*create", re.IGNORECASE),
     re.compile(r"CALL\s*\{"),
 )
 _STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 def strip_string_literals(query: str) -> str:
     return _STRING_LITERAL_RE.sub("", query)
-
-
-_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
-_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 def _strip_comments(query: str) -> str:
@@ -53,5 +61,5 @@ def is_read_only_cypher(query: str) -> bool:
 def read_only_rejection_message() -> str:
     return (
         "This tool only supports read-only queries. Prohibited keywords like "
-        "CREATE, MERGE, DELETE, SET, etc., are not allowed."
+        "CREATE, MERGE, DELETE, SET, ALTER, COPY, etc., are not allowed."
     )

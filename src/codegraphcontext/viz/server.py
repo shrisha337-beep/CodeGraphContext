@@ -14,8 +14,42 @@ from typing import Optional, List, Dict, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..core.database import DatabaseManager
 from ..utils.debug_log import debug_log
+from ..utils.path_sandbox import is_path_allowed
 
 app = FastAPI()
+
+
+def _static_root() -> Path:
+    if not _static_dir:
+        raise HTTPException(status_code=500, detail="Static directory not configured")
+    return Path(_static_dir).resolve()
+
+
+def _safe_static_file(relative_path: str) -> Path:
+    """Resolve *relative_path* under the static root; reject traversal."""
+    root = _static_root()
+    candidate = (root / relative_path).resolve()
+    if not is_path_under_static(candidate, root):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return candidate
+
+
+def is_path_under_static(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_read_text_file(path: str) -> str:
+    file_path = Path(path).resolve()
+    if not is_path_allowed(file_path):
+        raise HTTPException(status_code=403, detail="File path is outside allowed roots")
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+        return handle.read()
 
 # CORS: only allow requests from the local visualization frontend.
 # The server binds to 127.0.0.1 (localhost) so only local origins are legitimate.
@@ -241,8 +275,12 @@ async def get_graph(repo_path: Optional[str] = None, cypher_query: Optional[str]
         file_contents: dict[str, str] = {}
         for fp in file_paths:
             try:
-                with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                    file_contents[fp] = f.read()
+                resolved = Path(fp).resolve()
+                if not is_path_allowed(resolved):
+                    continue
+                file_contents[fp] = _safe_read_text_file(str(resolved))
+            except HTTPException:
+                continue
             except Exception:
                 pass
 
@@ -269,32 +307,30 @@ async def get_graph(repo_path: Optional[str] = None, cypher_query: Optional[str]
 
 @app.get("/api/file")
 async def get_file(path: str):
-    file_path = Path(path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return {"content": f.read()}
+        return {"content": _safe_read_text_file(path)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # SPA fallback handler
 @app.get("/{full_path:path}")
 async def spa_fallback(request: Request, full_path: str):
-    global _static_dir
-    if not _static_dir:
-        return HTMLResponse("Static directory not configured", status_code=500)
-    
-    # Filesystem path
-    file_path = Path(_static_dir) / full_path
-    
-    # If the file exists and is a file, serve it normally
-    if file_path.exists() and file_path.is_file():
+    try:
+        root = _static_root()
+    except HTTPException as exc:
+        return HTMLResponse(exc.detail, status_code=exc.status_code)
+
+    try:
+        file_path = _safe_static_file(full_path)
+    except HTTPException:
+        file_path = None
+
+    if file_path and file_path.exists() and file_path.is_file():
         return FileResponse(file_path)
-    
-    # Otherwise serve index.html (Standard SPA routing)
-    index_path = Path(_static_dir) / "index.html"
+
+    index_path = root / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
     

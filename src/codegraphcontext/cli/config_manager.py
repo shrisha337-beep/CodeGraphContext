@@ -276,11 +276,31 @@ def load_config() -> Dict[str, str]:
     return config
 
 
+def should_apply_project_dotenv() -> bool:
+    """True when cwd-local ``.codegraphcontext/.env`` should merge with global config.
+
+    Skips project env when ``HOME`` is isolated (e.g. E2E) but ``cwd`` is an unrelated
+    checkout, unless ``CGC_LOAD_PROJECT_ENV=1``. Set ``CGC_IGNORE_PROJECT_ENV=1`` to force skip.
+    """
+    if os.getenv("CGC_IGNORE_PROJECT_ENV", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    if os.getenv("CGC_LOAD_PROJECT_ENV", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    try:
+        Path.cwd().resolve().relative_to(Path.home().resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def find_local_env() -> Optional[Path]:
     """
     Find a local .env file by searching current directory and parents.
     Returns the first .env file found, or None.
     """
+    if not should_apply_project_dotenv():
+        return None
+
     current = Path.cwd()
     
     # Search up to 5 levels up
@@ -483,6 +503,11 @@ def get_config_value(key: str) -> Optional[str]:
     """Get a specific configuration value."""
     config = load_config()
     return config.get(key)
+
+
+def is_db_deletion_allowed() -> bool:
+    """True when destructive delete/clear operations are permitted."""
+    return str(get_config_value("ALLOW_DB_DELETION") or "false").strip().lower() == "true"
 
 
 def set_config_value(key: str, value: str) -> bool:

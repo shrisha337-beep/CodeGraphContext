@@ -1,4 +1,5 @@
 # src/codegraphcontext/tools/handlers/indexing_handlers.py
+import os
 from typing import Any, Dict
 from pathlib import Path
 import asyncio
@@ -96,7 +97,16 @@ def add_package_to_graph(graph_builder, job_manager, loop, list_repos_func, **ar
         
         if not package_path:
             return {"error": f"Could not find package '{package_name}' for language '{language}'. Make sure it's installed."}
-        
+
+        package_resolved = Path(package_path).resolve()
+        if not _is_path_allowed(package_resolved):
+            return {
+                "error": (
+                    f"Package path '{package_resolved}' is outside allowed roots. "
+                    "Add its parent directory to CGC_ALLOWED_ROOTS to index packages."
+                )
+            }
+
         if not os.path.exists(package_path):
             return {"error": f"Package path '{package_path}' does not exist"}
         

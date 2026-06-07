@@ -373,13 +373,11 @@ class MCPServer:
         output_path_raw = args.get("output_path")
         output_path = Path(output_path_raw) if output_path_raw else self.cwd / "CGC_REPORT.md"
 
-        base_dir = self.cwd.resolve()
-        output_path = output_path.resolve()
+        from .utils.path_sandbox import is_path_allowed
 
-        try:
-            output_path.relative_to(base_dir)
-        except ValueError:
-            return {"error": "Invalid output_path: path traversal is not allowed"}
+        output_path = output_path.resolve()
+        if not is_path_allowed(output_path):
+            return {"error": "Invalid output_path: path is outside allowed roots"}
 
         try:
             report = generate_report(
@@ -404,8 +402,17 @@ class MCPServer:
         return analysis_handlers.find_datasource_nodes(self.code_finder, **args)
 
     def discover_codegraph_contexts_tool(self, **args) -> Dict[str, Any]:
+        from .utils.path_sandbox import is_path_allowed, clamp_discovery_depth
+
         scan_path = Path(args.get("path", str(self.cwd))).resolve()
-        max_depth = int(args.get("max_depth", 1))
+        if not is_path_allowed(scan_path):
+            return {
+                "error": (
+                    f"Path '{scan_path}' is outside allowed roots. "
+                    "Set CGC_ALLOWED_ROOTS to scan additional directories."
+                )
+            }
+        max_depth = clamp_discovery_depth(args.get("max_depth", 1))
         try:
             children = discover_child_contexts(scan_path, max_depth=max_depth)
             if not children:
@@ -684,7 +691,10 @@ class MCPServer:
 
                 error_response = {
                     "jsonrpc": "2.0", "id": request_id,
-                    "error": {"code": -32603, "message": f"Internal error: {str(e)}", "data": traceback.format_exc()}
+                    "error": {
+                        "code": -32603,
+                        "message": f"Internal error: {str(e)}",
+                    },
                 }
                 print(json.dumps(error_response), flush=True)
 

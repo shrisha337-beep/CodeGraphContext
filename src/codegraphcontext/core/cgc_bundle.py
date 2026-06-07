@@ -133,7 +133,12 @@ class CGCBundle:
                 # Step 3: Extract nodes
                 info_logger("Extracting nodes...")
                 node_count = self._extract_nodes(temp_path / "nodes.jsonl", repo_path)
-                
+                if node_count == 0:
+                    return False, (
+                        "No nodes to export. Index the repository first or verify "
+                        "that --repo exists in the graph."
+                    )
+
                 # Step 4: Extract edges
                 info_logger("Extracting edges...")
                 edge_count = self._extract_edges(temp_path / "edges.jsonl", repo_path)
@@ -434,182 +439,230 @@ class CGCBundle:
                     pass
 
         return schema
+
+    def _repo_scope_params(self, repo_path: Path) -> Dict[str, str]:
+        repo_str = str(repo_path.resolve())
+        return {"repo_path": repo_str, "repo_prefix": repo_str + os.sep}
+
+    def _run_session_query(self, session, query: str, params: Dict[str, str]):
+        try:
+            return session.run(query, **params)
+        except TypeError:
+            return session.run(query)
+
+    def _normalize_labels(self, labels) -> List[str]:
+        if labels is None:
+            return []
+        if isinstance(labels, str):
+            return [labels]
+        if isinstance(labels, list):
+            return labels
+        return list(labels)
+
+    def _node_to_dict(self, node) -> Dict[str, Any]:
+        try:
+            node_dict = dict(node)
+        except TypeError:
+            node_dict = {}
+            if hasattr(node, '_properties'):
+                node_dict = dict(node._properties)
+            elif hasattr(node, 'properties'):
+                node_dict = dict(node.properties)
+        node_dict.pop('_label', None)
+        for key, val in list(node_dict.items()):
+            if key != '_id' and val is None:
+                node_dict.pop(key)
+        return node_dict
+
+    def _node_identity(self, node, labels: List[str], node_dict: Dict[str, Any]) -> str:
+        if '_id' in node_dict:
+            return str(node_dict['_id'])
+        if hasattr(node, 'element_id'):
+            return str(node.element_id)
+        if hasattr(node, 'id'):
+            return str(node.id)
+        label = labels[0] if labels else ''
+        return f"{label}:{node_dict.get('name', '')}:{node_dict.get('path', '')}"
+
+    def _repo_node_queries(self) -> List[str]:
+        return [
+            """
+            MATCH (n)
+            WHERE n.path = $repo_path OR n.path STARTS WITH $repo_prefix
+            RETURN n, labels(n) as labels
+            """,
+            """
+            MATCH (f:File)-[:IMPORTS]->(n:Module)
+            WHERE f.path = $repo_path OR f.path STARTS WITH $repo_prefix
+            RETURN n, labels(n) as labels
+            """,
+            """
+            MATCH (c)-[:INHERITS|IMPLEMENTS]->(n:ExternalClass)
+            WHERE c.path = $repo_path OR c.path STARTS WITH $repo_prefix
+            RETURN n, labels(n) as labels
+            """,
+        ]
+
+    def _repo_edge_queries(self) -> List[str]:
+        return [
+            """
+            MATCH (n)-[r]->(m)
+            WHERE (n.path = $repo_path OR n.path STARTS WITH $repo_prefix)
+               OR (m.path = $repo_path OR m.path STARTS WITH $repo_prefix)
+            RETURN n, r, m, type(r) as rel_type
+            """,
+            """
+            MATCH (f:File)-[r:IMPORTS]->(m:Module)
+            WHERE f.path = $repo_path OR f.path STARTS WITH $repo_prefix
+            RETURN f as n, r, m, type(r) as rel_type
+            """,
+            """
+            MATCH (c)-[r:INHERITS|IMPLEMENTS]->(ec:ExternalClass)
+            WHERE c.path = $repo_path OR c.path STARTS WITH $repo_prefix
+            RETURN c as n, r, ec as m, type(r) as rel_type
+            """,
+        ]
     
     def _extract_nodes(self, output_file: Path, repo_path: Optional[Path]) -> int:
         """Extract all nodes to JSONL format."""
         count = 0
+        seen_nodes = set()
         
         with self.db_manager.get_driver().session() as session:
-            # Build query based on repo_path
             if repo_path:
-                query = """
-                    MATCH (n)
-                    WHERE n.path = $repo_path OR n.path STARTS WITH $repo_prefix
-                    RETURN n, labels(n) as labels
-                """
-                repo_str = str(repo_path.resolve())
-                params = {"repo_path": repo_str, "repo_prefix": repo_str + os.sep}
+                queries = self._repo_node_queries()
+                params = self._repo_scope_params(repo_path)
             else:
-                query = "MATCH (n) RETURN n, labels(n) as labels"
+                queries = ["MATCH (n) RETURN n, labels(n) as labels"]
                 params = {}
             
-            # Run query with proper parameter handling for both Neo4j and FalkorDB
-            try:
-                result = session.run(query, **params)
-            except TypeError:
-                # FalkorDB might not support **params, try without
-                result = session.run(query)
-            
             with open(output_file, 'w') as f:
-                for record in result:
-                    node = record['n']
-                    labels = record['labels']
-                    if labels is None:
-                        labels = []
-                    elif isinstance(labels, str):
-                        labels = [labels]
-                    elif not isinstance(labels, list):
-                        labels = list(labels)
+                for query in queries:
+                    result = self._run_session_query(session, query, params)
+                    for record in result:
+                        node = record['n']
+                        labels = self._normalize_labels(record['labels'])
+                        node_dict = self._node_to_dict(node)
+                        node_key = self._node_identity(node, labels, node_dict)
+                        if node_key in seen_nodes:
+                            continue
+                        seen_nodes.add(node_key)
                     
-                    # Convert node to dict (handle both Neo4j and FalkorDB)
-                    try:
-                        node_dict = dict(node)
-                    except TypeError:
-                        # FalkorDB nodes might not be directly convertible
-                        node_dict = {}
-                        if hasattr(node, '_properties'):
-                            node_dict = dict(node._properties)
-                        elif hasattr(node, 'properties'):
-                            node_dict = dict(node.properties)
-
-                    node_dict.pop('_label', None)
-                    for key, val in list(node_dict.items()):
-                        if key != '_id' and val is None:
-                            node_dict.pop(key)
+                        # Clean up absolute path prefix to keep it relative
+                        if repo_path:
+                            repo_str = str(repo_path.resolve())
+                            repo_prefix = repo_str + os.sep
+                            for key, val in list(node_dict.items()):
+                                if not isinstance(val, str):
+                                    continue
+                                if val == repo_str:
+                                    node_dict[key] = "."
+                                elif val.startswith(repo_prefix):
+                                    rel = val[len(repo_prefix):].lstrip('/\\')
+                                    node_dict[key] = "./" + rel if rel else "."
                     
-                    # Clean up absolute path prefix to keep it relative
-                    if repo_path:
-                        repo_str = str(repo_path.resolve())
-                        repo_prefix = repo_str + os.sep
-                        for key, val in list(node_dict.items()):
-                            if not isinstance(val, str):
-                                continue
-                            if val == repo_str:
-                                node_dict[key] = "."
-                            elif val.startswith(repo_prefix):
-                                rel = val[len(repo_prefix):].lstrip('/\\')
-                                node_dict[key] = "./" + rel if rel else "."
+                        node_dict['_labels'] = labels
                     
-                    node_dict['_labels'] = labels
+                        if '_id' not in node_dict:
+                            if hasattr(node, 'element_id'):
+                                node_dict['_id'] = node.element_id
+                            elif hasattr(node, 'id'):
+                                node_dict['_id'] = str(node.id)
                     
-                    # Store internal ID for reference
-                    if '_id' in node_dict:
-                        pass
-                    elif hasattr(node, 'element_id'):
-                        node_dict['_id'] = node.element_id
-                    elif hasattr(node, 'id'):
-                        node_dict['_id'] = str(node.id)
-                    
-                    f.write(json.dumps(node_dict, cls=_BundleEncoder) + '\n')
-                    count += 1
+                        f.write(json.dumps(node_dict, cls=_BundleEncoder) + '\n')
+                        count += 1
         
         return count
     
     def _extract_edges(self, output_file: Path, repo_path: Optional[Path]) -> int:
         """Extract all relationships to JSONL format."""
         count = 0
+        seen_edges = set()
         
         with self.db_manager.get_driver().session() as session:
-            # Build query based on repo_path
             if repo_path:
-                query = """
-                    MATCH (n)-[r]->(m)
-                    WHERE (n.path = $repo_path OR n.path STARTS WITH $repo_prefix)
-                       OR (m.path = $repo_path OR m.path STARTS WITH $repo_prefix)
-                    RETURN n, r, m, type(r) as rel_type
-                """
-                repo_str = str(repo_path.resolve())
-                params = {"repo_path": repo_str, "repo_prefix": repo_str + os.sep}
+                queries = self._repo_edge_queries()
+                params = self._repo_scope_params(repo_path)
             else:
-                query = "MATCH (n)-[r]->(m) RETURN n, r, m, type(r) as rel_type"
+                queries = ["MATCH (n)-[r]->(m) RETURN n, r, m, type(r) as rel_type"]
                 params = {}
             
-            # Run query with proper parameter handling for both Neo4j and FalkorDB
-            try:
-                result = session.run(query, **params)
-            except TypeError:
-                # FalkorDB might not support **params, try without
-                result = session.run(query)
-            
             with open(output_file, 'w') as f:
-                for record in result:
-                    source = record['n']
-                    target = record['m']
-                    rel = record['r']
-                    rel_type = record['rel_type']
+                for query in queries:
+                    result = self._run_session_query(session, query, params)
+                    for record in result:
+                        source = record['n']
+                        target = record['m']
+                        rel = record['r']
+                        rel_type = record['rel_type']
 
-                    # Get relationship properties
-                    try:
-                        rel_props = dict(rel)
-                    except TypeError:
-                        rel_props = {}
-                        if hasattr(rel, '_properties'):
-                            rel_props = dict(rel._properties)
-                        elif hasattr(rel, 'properties'):
-                            rel_props = dict(rel.properties)
+                        # Get relationship properties
+                        try:
+                            rel_props = dict(rel)
+                        except TypeError:
+                            rel_props = {}
+                            if hasattr(rel, '_properties'):
+                                rel_props = dict(rel._properties)
+                            elif hasattr(rel, 'properties'):
+                                rel_props = dict(rel.properties)
 
-                    # Kùzu/Ladybug-style relationship records expose stable
-                    # endpoint IDs as properties. Prefer those over Python
-                    # wrapper object ids so exported edges can be re-linked to
-                    # the node rows in nodes.jsonl.
-                    from_id = rel_props.pop('_src', None)
-                    to_id = rel_props.pop('_dst', None)
-                    rel_props.pop('_label', None)
-                    rel_props.pop('_id', None)
-                    for key, val in list(rel_props.items()):
-                        if val is None:
-                            rel_props.pop(key)
-
-                    # Get source and target IDs (handle Neo4j/FalkorDB fallback)
-                    if from_id is None:
-                        if hasattr(source, 'element_id'):
-                            from_id = source.element_id
-                        elif hasattr(source, 'id'):
-                            from_id = str(source.id)
-                        else:
-                            from_id = str(id(source))
-
-                    if to_id is None:
-                        if hasattr(target, 'element_id'):
-                            to_id = target.element_id
-                        elif hasattr(target, 'id'):
-                            to_id = str(target.id)
-                        else:
-                            to_id = str(id(target))
-                    
-                    # Clean up absolute path prefix inside edge properties
-                    if repo_path:
-                        repo_str = str(repo_path.resolve())
-                        repo_prefix = repo_str + os.sep
+                        # Kùzu/Ladybug-style relationship records expose stable
+                        # endpoint IDs as properties. Prefer those over Python
+                        # wrapper object ids so exported edges can be re-linked to
+                        # the node rows in nodes.jsonl.
+                        from_id = rel_props.pop('_src', None)
+                        to_id = rel_props.pop('_dst', None)
+                        rel_props.pop('_label', None)
+                        rel_props.pop('_id', None)
                         for key, val in list(rel_props.items()):
-                            if not isinstance(val, str):
-                                continue
-                            if val == repo_str:
-                                rel_props[key] = "."
-                            elif val.startswith(repo_prefix):
-                                rel = val[len(repo_prefix):].lstrip('/\\')
-                                rel_props[key] = "./" + rel if rel else "."
-                    
-                    # Create edge representation
-                    edge_dict = {
-                        'from': from_id,
-                        'to': to_id,
-                        'type': rel_type,
-                        'properties': rel_props
-                    }
-                    
-                    f.write(json.dumps(edge_dict, cls=_BundleEncoder) + '\n')
-                    count += 1
+                            if val is None:
+                                rel_props.pop(key)
+
+                        # Get source and target IDs (handle Neo4j/FalkorDB fallback)
+                        if from_id is None:
+                            if hasattr(source, 'element_id'):
+                                from_id = source.element_id
+                            elif hasattr(source, 'id'):
+                                from_id = str(source.id)
+                            else:
+                                from_id = str(id(source))
+
+                        if to_id is None:
+                            if hasattr(target, 'element_id'):
+                                to_id = target.element_id
+                            elif hasattr(target, 'id'):
+                                to_id = str(target.id)
+                            else:
+                                to_id = str(id(target))
+
+                        edge_key = (str(from_id), str(rel_type), str(to_id))
+                        if edge_key in seen_edges:
+                            continue
+                        seen_edges.add(edge_key)
+                        
+                        # Clean up absolute path prefix inside edge properties
+                        if repo_path:
+                            repo_str = str(repo_path.resolve())
+                            repo_prefix = repo_str + os.sep
+                            for key, val in list(rel_props.items()):
+                                if not isinstance(val, str):
+                                    continue
+                                if val == repo_str:
+                                    rel_props[key] = "."
+                                elif val.startswith(repo_prefix):
+                                    rel = val[len(repo_prefix):].lstrip('/\\')
+                                    rel_props[key] = "./" + rel if rel else "."
+                        
+                        # Create edge representation
+                        edge_dict = {
+                            'from': from_id,
+                            'to': to_id,
+                            'type': rel_type,
+                            'properties': rel_props
+                        }
+                        
+                        f.write(json.dumps(edge_dict, cls=_BundleEncoder) + '\n')
+                        count += 1
         
         return count
     

@@ -227,6 +227,7 @@ _LAZY_IMPORTS = {
     'FalkorDBManager': '.database_falkordb',
     'FalkorDBRemoteManager': '.database_falkordb_remote',
     'KuzuDBManager': '.database_kuzu',
+    'LadybugDBManager': '.database_ladybug',
     'NornicDBManager': '.database_nornic',
 }
 
@@ -236,12 +237,13 @@ def __getattr__(name: str):
         module = importlib.import_module(_LAZY_IMPORTS[name], __package__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-# For backward compatibility, export managers
-from .database import DatabaseManager
-from .database_falkordb import FalkorDBManager
-from .database_falkordb_remote import FalkorDBRemoteManager
-from .database_kuzu import KuzuDBManager
-from .database_ladybug import LadybugDBManager
-from .database_nornic import NornicDBManager
 
-__all__ = ['DatabaseManager', 'FalkorDBManager', 'FalkorDBRemoteManager', 'KuzuDBManager', 'LadybugDBManager', 'NornicDBManager', 'get_database_manager']
+__all__ = [
+    'DatabaseManager',
+    'FalkorDBManager',
+    'FalkorDBRemoteManager',
+    'KuzuDBManager',
+    'LadybugDBManager',
+    'NornicDBManager',
+    'get_database_manager',
+]

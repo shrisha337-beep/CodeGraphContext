@@ -298,9 +298,10 @@ def index_helper(path: str, context: Optional[str] = None):
         except Exception as e:
             console.print(f"[yellow]Warning: Could not check file count: {e}. Proceeding with indexing...[/yellow]")
 
-    # Auto-register the repo into the named context (auto-creates if needed)
     if context and ctx.mode == "named":
-        register_repo_in_context(context, str(path_obj), auto_create=True)
+        if not register_repo_in_context(context, str(path_obj), auto_create=False):
+            db_manager.close_driver()
+            raise typer.Exit(code=1)
 
     console.print(f"Starting indexing for: {path_obj}")
 
@@ -575,6 +576,7 @@ def visualize_helper(
         run_server(host="127.0.0.1", port=port, static_dir=str(static_dir))
     except Exception as e:
         console.print(f"[bold red]An error occurred while running the server:[/bold red] {e}")
+        raise typer.Exit(code=1)
     finally:
         db_manager.close_driver()
 
@@ -799,12 +801,12 @@ def watch_helper(path: str, context: Optional[str] = None):
     if not path_obj.exists():
         console.print(f"[red]Error: Path does not exist: {path_obj}[/red]")
         db_manager.close_driver()
-        return
+        raise typer.Exit(code=1)
     
     if not path_obj.is_dir():
         console.print(f"[red]Error: Path must be a directory: {path_obj}[/red]")
         db_manager.close_driver()
-        return
+        raise typer.Exit(code=1)
 
     console.print(f"[bold cyan]🔍 Watching {path_obj} for changes...[/bold cyan]")
     

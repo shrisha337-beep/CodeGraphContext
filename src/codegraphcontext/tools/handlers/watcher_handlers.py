@@ -15,10 +15,21 @@ def list_watched_paths(code_watcher, **args) -> Dict[str, Any]:
 
 def unwatch_directory(code_watcher, **args) -> Dict[str, Any]:
     """Tool to stop watching a directory."""
+    from pathlib import Path
+
     path = args.get("path")
     if not path:
         return {"error": "Path is a required argument."}
-    return code_watcher.unwatch_directory(path)
+
+    path_obj = Path(path).resolve()
+    if not is_path_allowed(path_obj):
+        return {
+            "error": (
+                f"Path '{path_obj}' is outside the allowed roots. "
+                "Only paths under the workspace or CGC_ALLOWED_ROOTS can be unwatched."
+            )
+        }
+    return code_watcher.unwatch_directory(str(path_obj))
 
 def watch_directory(code_watcher, list_repositories_func, add_code_func, **args) -> Dict[str, Any]:
     """

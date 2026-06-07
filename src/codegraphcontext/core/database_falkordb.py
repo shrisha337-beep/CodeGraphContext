@@ -147,9 +147,10 @@ class FalkorDBManager:
         
         self.graph_name = os.getenv('FALKORDB_GRAPH_NAME', 'codegraph')
         self._initialized = True
-        
-        # Register cleanup on exit
-        atexit.register(self.shutdown)
+
+        if not getattr(self, "_atexit_registered", False):
+            atexit.register(self.shutdown)
+            self._atexit_registered = True
 
     def get_driver(self):
         """
