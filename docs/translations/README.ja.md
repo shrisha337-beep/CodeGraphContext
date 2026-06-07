@@ -98,7 +98,7 @@
 ---
 
 ## プロジェクト概要
-- **バージョン:** 0.4.14
+- **バージョン:** 0.4.15
 - **作者:** Shashank Shekhar Singh <shashankshekharsingh1205@gmail.com>
 - **ライセンス:** MIT License（詳細は [LICENSE](LICENSE) を参照）
 - **ウェブサイト:** [CodeGraphContext](http://codegraphcontext.vercel.app/)

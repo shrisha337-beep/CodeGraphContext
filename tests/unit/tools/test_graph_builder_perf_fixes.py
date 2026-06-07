@@ -685,40 +685,46 @@ class TestDeleteRepositoryFromGraph:
 
     def test_finds_repo_stored_with_backslash_path(self):
         """Fallback should find a Repository stored with Windows backslash paths."""
-        session = _RecordingSession(responses=[
+        session = _DeleteRepoSession(labels=self._DEFAULT_DB_LABELS, responses=[
             _FakeResult([{"cnt": 0}]),   # normalized (forward-slash) fails
             _FakeResult([{"cnt": 1}]),   # fallback (original backslash) succeeds
-            _FakeResult([{"deleted": 0}]) * 20,  # drain loops
-        ])
+        ] + [_FakeResult([{"deleted": 0}])] * 20)
         gb, _ = _make_graph_builder(session)
         result = gb.delete_repository_from_graph("C:\\Users\\test\\repo")
         assert result is True
         
         # Verify that fallback path was used for subsequent operations
-        queries = [c["query"] for c in session.calls]
         # Should use backslash path prefix for STARTS WITH queries
-        assert any("C:\\Users\\test\\repo\\" in q for q in queries), \
+        assert any(c["kwargs"].get("prefix") == "C:\\Users\\test\\repo\\" for c in session.calls), \
             "Expected backslash path prefix in STARTS WITH queries after fallback"
 
     def test_uses_matching_path_format_for_deletion(self):
         """When fallback triggers, deletion queries should use the path format that matched."""
-        session = _RecordingSession(responses=[
+        session = _DeleteRepoSession(labels=self._DEFAULT_DB_LABELS, responses=[
             _FakeResult([{"cnt": 0}]),   # normalized (forward-slash) fails
             _FakeResult([{"cnt": 1}]),   # fallback (original backslash) succeeds
-            _FakeResult([{"deleted": 0}]) * 20,  # drain loops
-        ])
+        ] + [_FakeResult([{"deleted": 0}])] * 20)
         gb, _ = _make_graph_builder(session)
         gb.delete_repository_from_graph("D:\\WorkPlace\\AI\\MinerU\\pipeline")
         
         # Check that all deletion queries use the backslash path
-        queries = [c["query"] for c in session.calls]
-        for q in queries:
+        for c in session.calls:
+            q = c["query"]
+            kwargs = c["kwargs"]
             if "STARTS WITH" in q or "DETACH DELETE" in q:
                 # Should use backslash path, not forward-slash
-                assert "D:/WorkPlace/AI/MinerU/pipeline" not in q, \
-                    "Should not use normalized forward-slash path after fallback"
-                assert "D:\\WorkPlace\\AI\\MinerU\\pipeline" in q or "D:\\WorkPlace\\AI\\MinerU\\pipeline\\" in q, \
-                    "Should use original backslash path after fallback"
+                prefix = kwargs.get("prefix")
+                path = kwargs.get("path")
+                if prefix:
+                    assert "D:/WorkPlace/AI/MinerU/pipeline" not in prefix, \
+                        "Should not use normalized forward-slash path after fallback"
+                    assert "D:\\WorkPlace\\AI\\MinerU\\pipeline" in prefix or "D:\\WorkPlace\\AI\\MinerU\\pipeline\\" in prefix, \
+                        "Should use original backslash path after fallback"
+                if path:
+                    assert "D:/WorkPlace/AI/MinerU/pipeline" not in path, \
+                        "Should not use normalized forward-slash path after fallback"
+                    assert "D:\\WorkPlace\\AI\\MinerU\\pipeline" in path, \
+                        "Should use original backslash path after fallback"
 
 
 # ---------------------------------------------------------------------------
