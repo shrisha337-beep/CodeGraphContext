@@ -781,7 +781,7 @@ def stats_helper(path: str = None, context: Optional[str] = None):
         db_manager.close_driver()
 
 
-def watch_helper(path: str, context: Optional[str] = None):
+def watch_helper(path: str, context: Optional[str] = None, use_polling: Optional[bool] = None):
     """Watch a directory for changes and auto-update the graph (blocking mode)."""
     import logging
     from ..core.watcher import CodeWatcher
@@ -836,7 +836,7 @@ def watch_helper(path: str, context: Optional[str] = None):
     
     # Create watcher instance
     job_manager = JobManager()
-    watcher = CodeWatcher(graph_builder, job_manager)
+    watcher = CodeWatcher(graph_builder, job_manager, use_polling=use_polling)
     
     try:
         # Start the observer thread
