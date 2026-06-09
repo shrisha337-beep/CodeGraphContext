@@ -295,7 +295,7 @@ class GraphBuilder:
             parent_path = resolved_repo_str
             parent_label = 'Repository'
             for part in relative_path_to_file.parts[:-1]:
-                current_path_str = str(Path(parent_path) / part)
+                current_path_str = f"{parent_path}/{part}"  # keep forward-slash DB paths
                 session.run(f"""
                     MATCH (p:{parent_label} {{path: $parent_path}})
                     MERGE (d:Directory {{path: $current_path}})

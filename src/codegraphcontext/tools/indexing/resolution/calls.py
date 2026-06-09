@@ -650,7 +650,7 @@ def resolve_function_call(
         if not path:
             return line_hint, context_hint, False
 
-        candidates = function_index.get((str(Path(path).resolve()), method_name), [])
+        candidates = function_index.get((Path(path).resolve().as_posix(), method_name), [])
         if not candidates:
             return line_hint, context_hint, False
 
@@ -700,7 +700,7 @@ def resolve_function_call(
             return line_hint, False
 
         class_key = simple_type_key(class_name) or class_name
-        candidates = class_index.get((str(Path(path).resolve()), class_key), [])
+        candidates = class_index.get((Path(path).resolve().as_posix(), class_key), [])
         if not candidates:
             return None, False
 
@@ -1337,7 +1337,7 @@ def resolve_function_call(
     class_target_key = simple_type_key(resolved_called_name) or resolved_called_name
     target_is_class = bool(
         resolved_path
-        and class_index.get((str(Path(resolved_path).resolve()), class_target_key), [])
+        and class_index.get((Path(resolved_path).resolve().as_posix(), class_target_key), [])
     )
     if target_is_class:
         (
@@ -1376,12 +1376,15 @@ def resolve_function_call(
             return None
     confidence = _TIER_CONFIDENCE.get(resolution_tier, 0.1)
     conf_label = _confidence_label(resolution_tier, is_unresolved_external)
+    # Normalize for DB path consistency (Windows: \ → /)
+    if resolved_path:
+        resolved_path = Path(resolved_path).resolve().as_posix()
 
     caller_context = call.get("context")
     if caller_context and len(caller_context) == 3 and caller_context[0] is not None:
         caller_name, caller_type, caller_line_number = caller_context
         if caller_type == "nested_call":
-            fp = str(Path(caller_file_path).resolve())
+            fp = Path(caller_file_path).resolve().as_posix()
             candidates = function_index.get((fp, caller_name), [])
             if candidates:
                 lines = [
@@ -1446,7 +1449,7 @@ def build_function_call_groups(
     # Symbols absent from this map are assumed to be Function nodes.
     file_symbol_labels: Dict[str, Dict[str, str]] = {}
     for fd in all_file_data:
-        fp = str(Path(fd["path"]).resolve())
+        fp = Path(fd["path"]).resolve().as_posix()
         sym_labels: Dict[str, str] = {}
         targets = {c["name"] for c in fd.get("classes", [])}
         for name in targets:
@@ -1704,7 +1707,7 @@ def build_function_call_groups(
         return list(dict.fromkeys(context_names))
 
     for fd in all_file_data:
-        file_path = str(Path(fd["path"]).resolve())
+        file_path = Path(fd["path"]).resolve().as_posix()
         package_name = file_package(fd)
         fd_local_imports = file_local_imports(fd)
         for class_data in fd.get("classes", []) + fd.get("interfaces", []) + fd.get("objects", []):
@@ -1862,7 +1865,7 @@ def build_function_call_groups(
         return _lang_imports_cache[caller_lang]
 
     for idx, file_data in enumerate(all_file_data):
-        caller_file_path = str(Path(file_data["path"]).resolve())
+        caller_file_path = Path(file_data["path"]).resolve().as_posix()
         func_names = {f["name"] for f in file_data.get("functions", [])}
         class_names = {c["name"] for c in file_data.get("classes", [])}
         # Pre-sort functions by line range for O(log n) scope lookup via bisect.
@@ -2513,12 +2516,12 @@ def build_function_call_groups(
             if resolved["type"] == "function":
                 caller_fp_raw = resolved["caller_file_path"]
                 if caller_fp_raw.endswith(_CPP_EXTS):
-                    caller_fp = str(Path(caller_fp_raw).resolve())
+                    caller_fp = Path(caller_fp_raw).resolve().as_posix()
                     caller_name = resolved["caller_name"]
                     resolved["caller_label"] = file_symbol_labels.get(caller_fp, {}).get(caller_name, "Function")
             called_fp_raw = resolved.get("called_file_path") or ""
             if called_fp_raw.endswith(_CPP_EXTS):
-                called_fp = str(Path(called_fp_raw).resolve())
+                called_fp = Path(called_fp_raw).resolve().as_posix()
                 called_name = resolved["called_name"]
                 resolved["called_label"] = file_symbol_labels.get(called_fp, {}).get(called_name, "Function")
 
@@ -2581,7 +2584,7 @@ def build_function_call_groups(
     file_to_object: List[Dict[str, Any]] = []
 
     for edge in resolved_calls:
-        called_path = str(Path(edge.get("called_file_path", "")).resolve())
+        called_path = Path(edge.get("called_file_path", "")).resolve().as_posix()
         called_name = edge.get("called_name")
         target_label = file_symbol_labels.get(called_path, {}).get(called_name)
 
