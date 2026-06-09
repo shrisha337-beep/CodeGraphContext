@@ -208,13 +208,13 @@ const HeroSection = () => {
                 placeholder="https://github.com/owner/repo"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
-                className="bg-black border-white/20 text-white placeholder-gray-500 rounded-2xl py-6 border-2 focus-visible:border-white focus-visible:ring-0"
+                className="bg-white dark:bg-black border-gray-200 dark:border-white/20 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 rounded-2xl py-6 border-2 focus-visible:border-purple-500 dark:focus-visible:border-white focus-visible:ring-0"
                 onKeyDown={(e) => e.key === "Enter" && handleGenerateBundle()}
               />
-              <div className="bg-white/5 border border-white/20 rounded-2xl p-4 flex items-start gap-3">
-                <Sparkles className="w-5 h-5 text-white shrink-0 mt-0.5" />
-                <div className="text-xs text-gray-400 leading-relaxed font-mono">
-                  <span className="font-bold text-white block mb-1">LIVE COMPLETION ALERT</span>
+              <div className="bg-black/5 dark:bg-white/5 border border-gray-200 dark:border-white/20 rounded-2xl p-4 flex items-start gap-3">
+                <Sparkles className="w-5 h-5 text-purple-600 dark:text-white shrink-0 mt-0.5" />
+                <div className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed font-mono">
+                  <span className="font-bold text-gray-900 dark:text-white block mb-1">LIVE COMPLETION ALERT</span>
                   Keep this tab open. We will notify you the moment your CodeGraph is generated successfully.
                 </div>
               </div>
@@ -396,23 +396,23 @@ const HeroSection = () => {
         </div>
 
         {/* Indexer Widget */}
-        <div className="w-full max-w-4xl border border-white/20 rounded-3xl bg-black relative shadow-2xl shadow-white/5 overflow-hidden">
-          <div className="flex w-full border-b border-white/20 relative">
-            <div className="absolute inset-0 bg-white/5 pointer-events-none"></div>
+        <div className="w-full max-w-4xl border border-gray-200 dark:border-white/20 rounded-3xl bg-white dark:bg-black relative shadow-2xl shadow-black/5 dark:shadow-white/5 overflow-hidden">
+          <div className="flex w-full border-b border-gray-200 dark:border-white/20 relative">
+            <div className="absolute inset-0 bg-black/5 dark:bg-white/5 pointer-events-none"></div>
             <button 
               onClick={() => setActiveTab('client')} 
-              className={`flex-1 py-5 text-xs font-bold uppercase tracking-widest transition-colors relative z-10 ${activeTab === 'client' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`flex-1 py-5 text-xs font-bold uppercase tracking-widest transition-colors relative z-10 ${activeTab === 'client' ? 'bg-purple-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
               Client Indexer
             </button>
             <button 
               onClick={() => setActiveTab('server')} 
-              className={`flex-1 py-5 text-xs font-bold uppercase tracking-widest transition-colors relative z-10 ${activeTab === 'server' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`flex-1 py-5 text-xs font-bold uppercase tracking-widest transition-colors relative z-10 ${activeTab === 'server' ? 'bg-purple-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
               Server Indexer
             </button>
           </div>
-          <div className="p-8 md:p-12 text-left bg-black relative">
+          <div className="p-8 md:p-12 text-left bg-white dark:bg-black relative">
             {activeTab === 'client' ? (
               <LocalUploader onComplete={setGraphData} plain={true} />
             ) : (

@@ -456,11 +456,11 @@ export default function LocalUploader({ onComplete, plain }: { onComplete: (data
     <div className={plain ? "flex flex-col w-full h-full relative z-10" : "flex flex-col p-6 w-full h-full min-h-[400px] border border-white/10 dark:border-white/20 rounded-[2rem] bg-black/40 backdrop-blur-xl shadow-2xl relative overflow-hidden"}>
 
       {/* Tab Selectors */}
-      <div className="grid grid-cols-2 sm:flex bg-white/5 p-1.5 rounded-2xl mb-6 relative z-10 w-full shadow-inner border border-white/5 gap-1.5 sm:gap-2">
-        <button onClick={() => setActiveTab('folder')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'folder' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-400 hover:text-white hover:bg-purple-500/20'}`}>Folder</button>
-        <button onClick={() => setActiveTab('zip')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'zip' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-400 hover:text-white hover:bg-purple-500/20'}`}>ZIP</button>
-        <button onClick={() => setActiveTab('cgc')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'cgc' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-400 hover:text-white hover:bg-purple-500/20'}`}>CGC Bundle</button>
-        <button onClick={() => setActiveTab('github')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'github' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-400 hover:text-white hover:bg-purple-500/20'}`}>GitHub</button>
+      <div className="grid grid-cols-2 sm:flex bg-black/5 dark:bg-white/5 p-1.5 rounded-2xl mb-6 relative z-10 w-full shadow-inner border border-gray-200 dark:border-white/5 gap-1.5 sm:gap-2">
+        <button onClick={() => setActiveTab('folder')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'folder' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-purple-500/10 dark:hover:bg-purple-500/20'}`}>Folder</button>
+        <button onClick={() => setActiveTab('zip')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'zip' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-purple-500/10 dark:hover:bg-purple-500/20'}`}>ZIP</button>
+        <button onClick={() => setActiveTab('cgc')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'cgc' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-purple-500/10 dark:hover:bg-purple-500/20'}`}>CGC Bundle</button>
+        <button onClick={() => setActiveTab('github')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'github' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]' : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-purple-500/10 dark:hover:bg-purple-500/20'}`}>GitHub</button>
       </div>
 
 
@@ -471,8 +471,8 @@ export default function LocalUploader({ onComplete, plain }: { onComplete: (data
           {activeTab === 'folder' && (
             <motion.div key="folder" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
 
-              <h3 className="text-2xl font-bold mb-2 text-white">Select Directory</h3>
-              <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Select a local folder. Visualized locally in the browser.</p>
+              <h3 className="text-2xl font-bold mb-2 text-gray-900 dark:text-white">Select Directory</h3>
+              <p className="text-gray-600 dark:text-gray-400 text-sm mb-8 max-w-[250px]">Select a local folder. Visualized locally in the browser.</p>
               <Button onClick={handleFolderSelect} className="bg-purple-600 text-white hover:bg-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.4)] rounded-full px-10 py-6 text-lg w-full max-w-[280px] shadow-[0_0_20px_rgba(255,255,255,0.1)]">
                 Browse Files
               </Button>
@@ -482,8 +482,8 @@ export default function LocalUploader({ onComplete, plain }: { onComplete: (data
           {activeTab === 'zip' && (
             <motion.div key="zip" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
 
-              <h3 className="text-2xl font-bold mb-2 text-white">Upload ZIP</h3>
-              <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Drop a compressed repository. Unzipped and parsed securely in memory.</p>
+              <h3 className="text-2xl font-bold mb-2 text-gray-900 dark:text-white">Upload ZIP</h3>
+              <p className="text-gray-600 dark:text-gray-400 text-sm mb-8 max-w-[250px]">Drop a compressed repository. Unzipped and parsed securely in memory.</p>
               <div className="relative w-full max-w-[280px]">
                 <Button className="bg-purple-600 text-white relative cursor-pointer hover:bg-gray-200 rounded-full px-10 py-6 text-lg w-full shadow-[0_0_20px_rgba(255,255,255,0.1)]">
                   Select ZIP Archive
@@ -496,8 +496,8 @@ export default function LocalUploader({ onComplete, plain }: { onComplete: (data
           {activeTab === 'cgc' && (
             <motion.div key="cgc" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
 
-              <h3 className="text-2xl font-bold mb-2 text-white">Upload CGC Bundle</h3>
-              <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Drop a .cgc pre-indexed bundle file. Loaded instantly in-memory.</p>
+              <h3 className="text-2xl font-bold mb-2 text-gray-900 dark:text-white">Upload CGC Bundle</h3>
+              <p className="text-gray-600 dark:text-gray-400 text-sm mb-8 max-w-[250px]">Drop a .cgc pre-indexed bundle file. Loaded instantly in-memory.</p>
               <div className="relative w-full max-w-[280px]">
                 <Button className="bg-purple-600 text-white relative cursor-pointer hover:bg-gray-200 rounded-full px-10 py-6 text-lg w-full shadow-[0_0_20px_rgba(255,255,255,0.1)]">
                   Select CGC Bundle
@@ -510,8 +510,8 @@ export default function LocalUploader({ onComplete, plain }: { onComplete: (data
           {activeTab === 'github' && (
             <motion.div key="github" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
 
-              <h3 className="text-2xl font-bold mb-2 text-white">Fetch Repository</h3>
-              <p className="text-gray-400 text-sm mb-6 max-w-[250px]">Pull raw files from a GitHub repository.</p>
+              <h3 className="text-2xl font-bold mb-2 text-gray-900 dark:text-white">Fetch Repository</h3>
+              <p className="text-gray-600 dark:text-gray-400 text-sm mb-6 max-w-[250px]">Pull raw files from a GitHub repository.</p>
 
               <div className="w-full space-y-3 mb-4">
                 <input
@@ -519,7 +519,7 @@ export default function LocalUploader({ onComplete, plain }: { onComplete: (data
                   placeholder="https://github.com/facebook/react"
                   value={githubUrl}
                   onChange={e => setGithubUrl(e.target.value)}
-                  className="w-full bg-black/40 border border-white/20 text-white placeholder-gray-500 px-5 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-sm"
+                  className="w-full bg-white/40 dark:bg-black/40 border border-gray-300 dark:border-white/20 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 px-5 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-sm"
                 />
 
                 <input
@@ -535,7 +535,7 @@ export default function LocalUploader({ onComplete, plain }: { onComplete: (data
                       localStorage.removeItem('github_pat');
                     }
                   }}
-                  className="w-full bg-black/40 border border-white/20 text-white placeholder-gray-500 px-5 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-sm"
+                  className="w-full bg-white/40 dark:bg-black/40 border border-gray-300 dark:border-white/20 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 px-5 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-sm"
                 />
               </div>
 
