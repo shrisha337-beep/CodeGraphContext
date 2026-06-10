@@ -15,6 +15,28 @@ from ..sanitize import sanitize_props
 from ..schema_contract import NODE_LABELS
 
 
+def sort_import_rows_for_metadata(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Put the most descriptive import first when several rows share a module name."""
+
+    def metadata_priority(row: Dict[str, Any]) -> Tuple[str, int, str, int]:
+        name = str(row.get("name") or "")
+        full_name = str(row.get("full_import_name") or "")
+        stripped = full_name.strip()
+
+        if stripped == "use super::*;":
+            priority = 0
+        elif stripped.startswith("pub use ") and not stripped.rstrip(";").endswith("::*"):
+            priority = 1
+        elif "{" in stripped and "}" in stripped:
+            priority = 2
+        elif stripped.startswith("pub use "):
+            priority = 3
+        else:
+            priority = 4
+
+        return (name, priority, full_name, int(row.get("line_number") or 0))
+
+    return sorted(rows, key=metadata_priority)
 def _normalize_path(p) -> str:
     """Normalize a path to use forward slashes for cross-platform DB consistency.
 
@@ -432,7 +454,11 @@ class GraphWriter:
                             }
                         )
                 else:
-                    module_name = imp.get("name") or imp.get("source")
+                    module_name = (
+                        imp.get("name")
+                        or imp.get("source")
+                        or imp.get("full_import_name")
+                    )
                     if not module_name:
                         continue
                     full_import_name = (
@@ -466,13 +492,14 @@ class GraphWriter:
                 )
 
             if other_imports:
+                other_imports = sort_import_rows_for_metadata(other_imports)
                 session.run(
                     """
                     UNWIND $batch AS row
                     MATCH (f:File {path: $file_path})
                     MERGE (m:Module {name: row.name})
-                    SET m.lang = coalesce(row.lang, m.lang),
-                        m.full_import_name = coalesce(row.full_import_name, m.full_import_name)
+                    SET m.lang = coalesce(m.lang, row.lang),
+                        m.full_import_name = coalesce(m.full_import_name, row.full_import_name)
                     MERGE (f)-[r:IMPORTS {line_number: row.line_number}]->(m)
                     SET r.alias = coalesce(row.alias, ""),
                         r.imported_name = row.imported_name,

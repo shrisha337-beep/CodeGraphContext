@@ -521,8 +521,7 @@ class TestAddFileToGraph:
 
         import_call = next(
             c for c in session.calls
-            if "MERGE (f)-[r:IMPORTS" in c["query"]
-            and "]->(m)" in c["query"]
+            if "MERGE (f)-[r:IMPORTS {line_number: row.line_number}]->(m)" in c["query"]
         )
         assert "m.alias" not in import_call["query"]
         assert import_call["kwargs"]["batch"] == [
@@ -534,6 +533,94 @@ class TestAddFileToGraph:
                 "line_number": 3,
                 "lang": "go",
             }
+        ]
+
+    def test_import_module_metadata_preserves_existing_node_values(self):
+        """Repeated imports of the same module should not overwrite node metadata."""
+        session = _RecordingSession(responses=[_FakeResult()])
+        gb, _ = _make_graph_builder(session)
+        file_data = {
+            "path": "/repo/generics.rs",
+            "lang": "rust",
+            "is_dependency": False,
+            "functions": [],
+            "classes": [],
+            "variables": [],
+            "imports": [
+                {
+                    "name": "Display",
+                    "full_import_name": "use std::fmt::{Debug, Display};",
+                    "line_number": 3,
+                    "alias": None,
+                }
+            ],
+            "function_calls": [],
+        }
+
+        gb.add_file_to_graph(file_data, "my_repo", {}, repo_path_str="/repo")
+
+        import_call = next(
+            c
+            for c in session.calls
+            if "MERGE (f)-[r:IMPORTS {line_number: row.line_number}]->(m)" in c["query"]
+        )
+        assert "m.lang = coalesce(m.lang, row.lang)" in import_call["query"]
+        assert "m.full_import_name = coalesce(m.full_import_name, row.full_import_name)" in import_call["query"]
+        assert "r.full_import_name = row.full_import_name" in import_call["query"]
+
+    def test_duplicate_import_metadata_uses_stable_canonical_order(self):
+        """Shared Rust module nodes should prefer stable, descriptive import metadata."""
+        session = _RecordingSession(responses=[_FakeResult()])
+        gb, _ = _make_graph_builder(session)
+        file_data = {
+            "path": "/repo/modules.rs",
+            "lang": "rust",
+            "is_dependency": False,
+            "functions": [],
+            "classes": [],
+            "variables": [],
+            "imports": [
+                {
+                    "name": "Rectangle",
+                    "full_import_name": "use super::shapes::{Circle, Rectangle};",
+                    "line_number": 37,
+                    "alias": None,
+                },
+                {
+                    "name": "*",
+                    "full_import_name": "pub use super::geometry::shapes::*;",
+                    "line_number": 98,
+                    "alias": None,
+                },
+                {
+                    "name": "Rectangle",
+                    "full_import_name": "pub use super::geometry::shapes::Rectangle;",
+                    "line_number": 77,
+                    "alias": None,
+                },
+                {
+                    "name": "*",
+                    "full_import_name": "use super::*;",
+                    "line_number": 104,
+                    "alias": None,
+                },
+            ],
+            "function_calls": [],
+        }
+
+        gb.add_file_to_graph(file_data, "my_repo", {}, repo_path_str="/repo")
+
+        import_call = next(
+            c
+            for c in session.calls
+            if "MERGE (f)-[r:IMPORTS {line_number: row.line_number}]->(m)" in c["query"]
+        )
+        batch = import_call["kwargs"]["batch"]
+        assert [row["full_import_name"] for row in batch] == [
+            "use super::*;",
+            "pub use super::geometry::shapes::*;",
+            "pub use super::geometry::shapes::Rectangle;",
+            "use super::shapes::{Circle, Rectangle};",
         ]
 
 

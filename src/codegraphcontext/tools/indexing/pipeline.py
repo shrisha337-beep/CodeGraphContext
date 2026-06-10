@@ -70,16 +70,8 @@ async def run_tree_sitter_index_async(
                 # 1. Parse file (CPU bound, run in thread)
                 file_data = await asyncio.to_thread(parse_file, repo_path, file, is_dependency)
                 
-                # 2. Write to graph (I/O bound, run in thread)
-                if "error" not in file_data:
-                    await asyncio.to_thread(
-                        writer.add_file_to_graph, 
-                        file_data, repo_name, imports_map, 
-                        repo_path_str=resolved_repo_path_str
-                    )
-                    return file_data
-                elif not file_data.get("unsupported"):
-                    await asyncio.to_thread(add_minimal_file_node, file, repo_path, is_dependency)
+                file_data["_index_repo_path"] = str(repo_path)
+                return file_data
             except Exception as e:
                 error_logger(f"Error indexing file {file}: {e}")
             
@@ -98,6 +90,28 @@ async def run_tree_sitter_index_async(
         
         if processed_count % 50 == 0:
             info_logger(f"Processed {processed_count}/{len(files)} files...")
+
+    # Parsing remains concurrent, but graph writes are ordered so shared nodes
+    # such as imported modules receive deterministic canonical metadata.
+    for file_data in sorted(all_file_data, key=lambda data: str(data.get("path") or "")):
+        repo_path = Path(file_data.pop("_index_repo_path"))
+        if "error" not in file_data:
+            await asyncio.to_thread(
+                writer.add_file_to_graph,
+                file_data,
+                repo_name,
+                imports_map,
+                repo_path_str=resolved_repo_path_str,
+            )
+        elif not file_data.get("unsupported"):
+            await asyncio.to_thread(
+                add_minimal_file_node,
+                Path(file_data["path"]),
+                repo_path,
+                is_dependency,
+            )
+
+    all_file_data = [file_data for file_data in all_file_data if "error" not in file_data]
 
     info_logger(
         f"File processing complete. {len(all_file_data)} files parsed. "

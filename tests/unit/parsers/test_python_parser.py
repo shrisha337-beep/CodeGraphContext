@@ -67,6 +67,31 @@ class TestPythonParser:
         assert module_func["context_type"] == "module"
         assert helper_call["context"] == ("<module>", "module", 1)
 
+    def test_duplicate_import_keeps_earliest_source_line(self, parser, temp_test_dir):
+        """Duplicate imports should be stable regardless of capture traversal order."""
+        code = (
+            "import os\n\n"
+            "def env_based_import():\n"
+            "    if os.getenv('USE_UJSON') == '1':\n"
+            "        try:\n"
+            "            import ujson as json\n"
+            "        except Exception:\n"
+            "            import json\n"
+            "    else:\n"
+            "        import json\n"
+            "    return json.dumps({'a': 1})\n"
+        )
+        f = temp_test_dir / "imports.py"
+        f.write_text(code)
+
+        result = parser.parse(str(f))
+        json_import = next(
+            imp for imp in result["imports"]
+            if imp["name"] == "json" and imp["full_import_name"] == "json"
+        )
+
+        assert json_import["line_number"] == 8
+
     def test_nested_module_level_calls_attribute_to_outer_callee(self, parser, temp_test_dir):
         """Nested call expressions attribute inner calls to the outer callee."""
         code = (

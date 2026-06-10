@@ -194,6 +194,17 @@ def load_and_normalize(nodes_path, edges_path, current_repo_root, bundle_repo_ro
             # Serialize props as a sorted tuple of items to make it hashable
             props_tuple = tuple(sorted(clean_props.items()))
             normalized_edges.add((from_key, to_key, edge_type, props_tuple))
+
+    referenced_node_keys = {
+        key
+        for edge in normalized_edges
+        for key in (edge[0], edge[1])
+    }
+    normalized_nodes = {
+        key: node
+        for key, node in normalized_nodes.items()
+        if "Module" not in normalize_labels(node.get("_labels")) or key in referenced_node_keys
+    }
             
     return normalized_nodes, normalized_edges
 
