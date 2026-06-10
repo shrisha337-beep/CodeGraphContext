@@ -15,8 +15,8 @@ import inspect
 import sys
 import pytest
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, call, patch
+from typing import Dict, List, Optional
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +260,10 @@ class TestCreateAllFunctionCallsV3:
         queries = [c["query"] for c in calls]
         assert any("UNWIND" in q for q in queries), "Expected UNWIND queries"
 
-    def test_uses_merge_for_calls_rel(self):
-        """CALLS relationships should use MERGE to prevent duplicates on re-index."""
+    def test_uses_create_for_calls_rel_on_neo4j(self):
+        """CALLS relationships should use CREATE on Neo4j — MERGE lock overhead
+        makes large repos (35k+ edges) take 60-90 min; CREATE drops to seconds.
+        All call paths delete existing CALLS before writing, so CREATE is safe."""
         file_data = [{
             "path": "/repo/a.py",
             "functions": [{"name": "foo", "line_number": 1}],
@@ -278,10 +280,61 @@ class TestCreateAllFunctionCallsV3:
         calls = self._run(file_data)
         call_rels = [c["query"] for c in calls if "CALLS" in c["query"]]
         for q in call_rels:
-            assert "MERGE" in q, f"Expected MERGE in CALLS query, got: {q[:120]}"
+            assert "CREATE" in q, f"Expected CREATE in CALLS query on Neo4j, got: {q[:120]}"
+            assert "MERGE" not in q, f"Unexpected MERGE in CALLS query on Neo4j, got: {q[:120]}"
 
-    def test_calls_merge_identity_excludes_mutable_metadata(self):
-        """CALLS confidence/tier should update without becoming relationship identity."""
+    def test_uses_merge_for_calls_rel_on_kuzudb(self):
+        """CALLS relationships should keep MERGE on KuzuDB — its UNWIND fallback
+        path can re-execute rows individually, making CREATE unsafe there."""
+        file_data = [{
+            "path": "/repo/a.py",
+            "functions": [{"name": "foo", "line_number": 1}],
+            "classes": [],
+            "imports": [],
+            "function_calls": [{
+                "name": "foo",
+                "line_number": 5,
+                "full_name": "foo",
+                "args": [],
+                "context": ("bar", None, 4),
+            }],
+        }]
+        session = _RecordingSession()
+        gb, _ = _make_graph_builder(session, backend="kuzudb")
+        with patch("codegraphcontext.tools.indexing.resolution.calls.get_config_value",
+                   return_value="false"):
+            gb._create_all_function_calls(file_data, {})
+        call_rels = [c["query"] for c in session.calls if "CALLS" in c["query"]]
+        for q in call_rels:
+            assert "MERGE" in q, f"Expected MERGE in CALLS query on KuzuDB, got: {q[:120]}"
+
+    def test_uses_merge_for_calls_rel_on_falkordb(self):
+        """CALLS relationships should keep MERGE on FalkorDB."""
+        file_data = [{
+            "path": "/repo/a.py",
+            "functions": [{"name": "foo", "line_number": 1}],
+            "classes": [],
+            "imports": [],
+            "function_calls": [{
+                "name": "foo",
+                "line_number": 5,
+                "full_name": "foo",
+                "args": [],
+                "context": ("bar", None, 4),
+            }],
+        }]
+        session = _RecordingSession()
+        gb, _ = _make_graph_builder(session, backend="falkordb")
+        with patch("codegraphcontext.tools.indexing.resolution.calls.get_config_value",
+                   return_value="false"):
+            gb._create_all_function_calls(file_data, {})
+        call_rels = [c["query"] for c in session.calls if "CALLS" in c["query"]]
+        for q in call_rels:
+            assert "MERGE" in q, f"Expected MERGE in CALLS query on FalkorDB, got: {q[:120]}"
+
+    def test_calls_rel_identity_excludes_mutable_metadata(self):
+        """CALLS confidence/tier should be written via SET, not baked into the
+        relationship identity key — they must not appear before the SET clause."""
         file_data = [{
             "path": "/repo/a.py",
             "functions": [{"name": "foo", "line_number": 1}],
@@ -299,10 +352,12 @@ class TestCreateAllFunctionCallsV3:
         }]
         calls = self._run(file_data)
         call_write = next(c for c in calls if "CALLS" in c["query"])
-        merge_clause = call_write["query"].split("MERGE", 1)[1].split("SET", 1)[0]
+        # Split on whichever keyword was used (CREATE on Neo4j, MERGE on others)
+        keyword = "CREATE" if "CREATE" in call_write["query"] else "MERGE"
+        rel_clause = call_write["query"].split(keyword, 1)[1].split("SET", 1)[0]
 
-        assert "confidence" not in merge_clause
-        assert "resolution_tier" not in merge_clause
+        assert "confidence" not in rel_clause
+        assert "resolution_tier" not in rel_clause
         assert "SET call.confidence = row.confidence" in call_write["query"]
         assert "call.resolution_tier = row.resolution_tier" in call_write["query"]
 
@@ -806,6 +861,20 @@ class TestDeleteRepositoryFromGraph:
             "db.labels() must come after existence check and before per-label deletion"
         )
 
+    def test_finds_repo_with_unix_path(self):
+        """A Unix path supplied to delete_repository_from_graph should resolve
+        correctly and find the repository in the existence check."""
+        session = _DeleteRepoSession(
+            labels=self._DEFAULT_DB_LABELS,
+            responses=[
+                _FakeResult([{"cnt": 1}]),
+                *([_FakeResult([{"deleted": 0}])] * 20),
+            ],
+        )
+        gb, _ = _make_graph_builder(session)
+        result = gb.delete_repository_from_graph("/home/user/my-repo")
+        assert result is True
+
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific backslash path regression test")
     def test_finds_repo_stored_with_backslash_path(self):
         """Fallback should find a Repository stored with Windows backslash paths."""
@@ -817,41 +886,29 @@ class TestDeleteRepositoryFromGraph:
         gb, _ = _make_graph_builder(session)
         result = gb.delete_repository_from_graph("C:\\Users\\test\\repo")
         assert result is True
-        
-        # Verify that fallback path was used in subsequent parameterised queries.
-        # The implementation uses $prefix / $path bindings, so we inspect kwargs
-        # rather than the query string.
-        prefix_values = [
-            c["kwargs"].get("prefix", "") for c in session.calls
-            if "STARTS WITH" in c["query"]
-        ]
-        assert any("C:\\Users\\test\\repo\\" in p for p in prefix_values), \
-            f"Expected backslash path prefix in $prefix kwargs, got: {prefix_values}"
 
-    def test_uses_matching_path_format_for_deletion(self):
-        """When fallback triggers, deletion queries should use the path format that matched."""
-        session = _RecordingSession(responses=[
-            _FakeResult([{"cnt": 0}]),   # normalized (forward-slash) fails
-            _FakeResult([{"cnt": 1}]),   # fallback (original backslash) succeeds
-            *([_FakeResult([{"deleted": 0}])] * 20),  # drain loops
-        ])
+    def test_deletion_queries_use_forward_slash_paths(self):
+        """All deletion queries must use forward-slash normalised paths so that
+        STARTS WITH scoping works correctly across platforms (issue #1080)."""
+        session = _DeleteRepoSession(
+            labels=self._DEFAULT_DB_LABELS,
+            responses=[
+                _FakeResult([{"cnt": 1}]),
+                *([_FakeResult([{"deleted": 0}])] * 20),
+            ],
+        )
         gb, _ = _make_graph_builder(session)
-        gb.delete_repository_from_graph("D:\\WorkPlace\\AI\\MinerU\\pipeline")
-        
-        # Check that parameterised queries use backslash paths (not forward-slash).
-        # The implementation passes paths via $prefix / $path bindings.
+        gb.delete_repository_from_graph("/home/user/my-repo")
+
         for c in session.calls:
             if "STARTS WITH" in c["query"] or "DETACH DELETE" in c["query"]:
-                kwargs = c["kwargs"]
                 for key in ("prefix", "path"):
-                    val = kwargs.get(key, "")
+                    val = c["kwargs"].get(key, "")
                     if val:
-                        assert "D:/WorkPlace/AI/MinerU/pipeline" not in val, \
-                            f"Should not use forward-slash path in ${key} after fallback, got: {val}"
-                        assert (
-                            "D:\\WorkPlace\\AI\\MinerU\\pipeline" in val
-                            or "D:\\WorkPlace\\AI\\MinerU\\pipeline\\" in val
-                        ), f"Should use backslash path in ${key}, got: {val}"
+                        assert "\\" not in val, \
+                            f"Backslash in ${key} kwarg — path must be normalised: {val!r}"
+                        assert "/" in val, \
+                            f"Expected forward-slash path in ${key}, got: {val!r}"
 
 
 # ---------------------------------------------------------------------------

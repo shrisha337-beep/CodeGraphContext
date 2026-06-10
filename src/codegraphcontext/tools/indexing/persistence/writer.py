@@ -7,7 +7,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from ....utils.debug_log import info_logger, warning_logger
 from ....utils.git_utils import get_repo_commit_hash
@@ -608,6 +608,13 @@ class GraphWriter:
     ) -> None:
         batch_size = 1000
 
+        backend = (
+            getattr(self._db_manager, "get_backend_type", None)
+            or getattr(self.driver, "get_backend_type", None)
+            or (lambda: "neo4j")
+        )()
+        calls_keyword = "CREATE" if backend in ("neo4j", "nornic") else "MERGE"
+
         fn_to_fn = fn_to_fn or []
         fn_to_class = fn_to_class or []
         fn_to_interface = fn_to_interface or []
@@ -705,7 +712,7 @@ class GraphWriter:
                         MATCH (called:{called_label} {{name: row.called_name, path: row.called_file_path}})
                         WHERE (row.called_line_number <= 0 OR called.line_number = row.called_line_number)
                           {called_context_clause}
-                        MERGE (caller)-[call:CALLS {{line_number: row.line_number, full_call_name: row.full_call_name, args_key: row.args_key}}]->(called)
+                        {calls_keyword} (caller)-[call:CALLS {{line_number: row.line_number, full_call_name: row.full_call_name, args_key: row.args_key}}]->(called)
                         SET call.args = row.args
                         SET call.confidence = row.confidence
                         SET call.resolution_tier = row.resolution_tier
@@ -718,7 +725,7 @@ class GraphWriter:
                         MATCH (called:{called_label} {{name: row.called_name, path: row.called_file_path}})
                         WHERE (row.called_line_number <= 0 OR called.line_number = row.called_line_number)
                           {called_context_clause}
-                        MERGE (caller)-[call:CALLS {{line_number: row.line_number, full_call_name: row.full_call_name, args_key: row.args_key}}]->(called)
+                        {calls_keyword} (caller)-[call:CALLS {{line_number: row.line_number, full_call_name: row.full_call_name, args_key: row.args_key}}]->(called)
                         SET call.args = row.args
                         SET call.confidence = row.confidence
                         SET call.resolution_tier = row.resolution_tier
@@ -760,7 +767,6 @@ class GraphWriter:
                     base_name = base_str.split("<")[0].strip()
 
                     is_interface = False
-                    resolved_path = caller_file_path
 
                     for iface in file_data.get("interfaces", []):
                         if iface["name"] == base_name:
@@ -770,7 +776,7 @@ class GraphWriter:
                     if base_name in imports_map:
                         possible_paths = imports_map[base_name]
                         if len(possible_paths) > 0:
-                            resolved_path = possible_paths[0]
+                            pass
 
                     base_index = type_item["bases"].index(base_str)
 
@@ -822,7 +828,6 @@ class GraphWriter:
         info_logger(
             f"[INHERITS] Resolving inheritance links across {len(inheritance_batch)} files..."
         )
-        batch_size = 500
         with self.driver.session() as session:
             internal_batch = [r for r in inheritance_batch if r.get("resolved_parent_file_path") != "__external__"]
             external_batch = [r for r in inheritance_batch if r.get("resolved_parent_file_path") == "__external__"]
@@ -1002,7 +1007,7 @@ class GraphWriter:
                     """,
                     batch=batch,
                 )
-        info_logger(f"[SPRING] INJECTS edges written.")
+        info_logger("[SPRING] INJECTS edges written.")
 
     def write_spring_endpoint_properties(self, endpoint_batch: List[Dict[str, Any]]) -> None:
         """Set http_method / http_path / transactional properties on Function nodes."""
