@@ -887,10 +887,15 @@ def resolve_context(
 
         inherited_db = load_config().get("DEFAULT_DATABASE", "falkordb")
 
-        # Copy global .env into local context for easy per-repo tweaking
+        # Copy global .env into local context for easy per-repo tweaking.
+        # Guard against the self-copy case: when cwd is the home directory,
+        # local_cgc resolves to CONFIG_DIR itself, so `local_cgc / ".env"` is
+        # CONFIG_FILE. Copying a file onto itself raises shutil.SameFileError,
+        # which crashes resolve_context for any session started from home.
         import shutil
-        if CONFIG_FILE.exists():
-            shutil.copy2(CONFIG_FILE, local_cgc / ".env")
+        _target_env = local_cgc / ".env"
+        if CONFIG_FILE.exists() and _target_env.resolve() != CONFIG_FILE.resolve():
+            shutil.copy2(CONFIG_FILE, _target_env)
 
         local_yaml = local_cgc / "config.yaml"
         if not local_yaml.exists():
