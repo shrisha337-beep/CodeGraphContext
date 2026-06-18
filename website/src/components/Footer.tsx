@@ -217,14 +217,14 @@ const Footer = () => {
                     Cookbook
                   </a>
                 </li>
-               <li>
-  <a
-    href="/contributing"
-    className="hover:text-white transition-colors"
-  >
-    Contributing
-  </a>
-</li>
+                <li>
+                  <a
+                    href="/contributing"
+                    className="hover:text-white transition-colors"
+                  >
+                    Contributing
+                  </a>
+                </li>
                 <li>
                   <a
                     href="https://github.com/CodeGraphContext/CodeGraphContext/issues"
